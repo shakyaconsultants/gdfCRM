@@ -22,25 +22,32 @@ async function verifyCookieJwt(
   }
 }
 
+function hubRedirectForRole(role: string) {
+  if (role === 'ADMIN') return '/admin'
+  if (role === 'ADVISOR') return '/advisor'
+  if (role === 'CASE_ASSESSOR') return '/case-assessor'
+  return '/employee'
+}
+
 export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname
   const token = request.cookies.get('token')?.value
   const crmSession = request.cookies.get(CRM_SESSION_COOKIE)?.value
 
   const adminOtpConfigured = !!(process.env.ADMIN_EMAIL ?? '').trim()
-  const isAuthPage = request.nextUrl.pathname.startsWith('/login')
-  const isPublicPage =
-    isAuthPage ||
-    request.nextUrl.pathname === '/' ||
-    request.nextUrl.pathname.startsWith('/crm-access')
-
+  const isLoginPage = pathname.startsWith('/login')
+  const isMarketingHome = pathname === '/'
+  const isCrmAccessPage = pathname.startsWith('/crm-access')
   const isCrmPath =
-    request.nextUrl.pathname === '/employee/crm' ||
-    request.nextUrl.pathname.startsWith('/employee/crm/')
+    pathname === '/employee/crm' || pathname.startsWith('/employee/crm/')
+  const isEmployeeHubPath =
+    (pathname === '/employee' || pathname.startsWith('/employee/')) && !isCrmPath
 
   const crmPayload = await verifyCookieJwt(crmSession)
   const hubPayload = await verifyCookieJwt(token)
   const hasCrmSession = crmPayload !== null && isCrmSessionPayload(crmPayload)
 
+  // CRM — requires crm_session (or legacy hub token with crm claim)
   if (isCrmPath) {
     if (hasCrmSession) return NextResponse.next()
     if (
@@ -52,61 +59,47 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/crm-access', request.url))
   }
 
+  // Team login page — always reachable; CRM session must not hijack this route
+  if (isLoginPage) {
+    if (hubPayload?.role) {
+      return NextResponse.redirect(
+        new URL(hubRedirectForRole(hubPayload.role as string), request.url)
+      )
+    }
+    return NextResponse.next()
+  }
+
+  // Marketing + CRM entry — no forced redirects (both products stay independent)
+  if (isMarketingHome || isCrmAccessPage) {
+    return NextResponse.next()
+  }
+
   if (!token && !crmSession) {
-    if (!isPublicPage) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  // Workspace — team token only (crm_session alone is not enough)
+  if (isEmployeeHubPath) {
+    if (!hubPayload || hubPayload.role !== 'EMPLOYEE') {
       return NextResponse.redirect(new URL('/login', request.url))
     }
     return NextResponse.next()
   }
 
-  const payload = hubPayload ?? (hasCrmSession ? crmPayload : null)
-  if (!payload) {
-    if (!isPublicPage) {
-      const response = NextResponse.redirect(new URL('/login', request.url))
-      response.cookies.delete('token')
-      response.cookies.delete(CRM_SESSION_COOKIE)
-      return response
-    }
-    return NextResponse.next()
-  }
-
-  const role = payload.role as string
-
-  if (isPublicPage) {
-    if (
-      request.nextUrl.pathname === '/' ||
-      request.nextUrl.pathname.startsWith('/crm-access')
-    ) {
-      return NextResponse.next()
-    }
-    if (role === 'ADMIN') return NextResponse.redirect(new URL('/admin', request.url))
-    if (role === 'ADVISOR') return NextResponse.redirect(new URL('/advisor', request.url))
-    if (role === 'CASE_ASSESSOR') {
-      return NextResponse.redirect(new URL('/case-assessor', request.url))
-    }
+  if (!hubPayload) {
     if (hasCrmSession) {
       return NextResponse.redirect(new URL('/employee/crm', request.url))
     }
+    const response = NextResponse.redirect(new URL('/login', request.url))
+    response.cookies.delete('token')
+    response.cookies.delete(CRM_SESSION_COOKIE)
+    return response
+  }
+
+  const role = hubPayload.role as string
+
+  if (pathname.startsWith('/admin') && role !== 'ADMIN') {
     return NextResponse.redirect(new URL('/employee', request.url))
-  }
-
-  if (request.nextUrl.pathname.startsWith('/admin') && role !== 'ADMIN') {
-    if (hasCrmSession) {
-      return NextResponse.redirect(new URL('/employee/crm', request.url))
-    }
-    return NextResponse.redirect(new URL('/employee', request.url))
-  }
-
-  const isEmployeeZone =
-    request.nextUrl.pathname.startsWith('/employee') ||
-    request.nextUrl.pathname === '/employee'
-
-  if (isEmployeeZone && role !== 'EMPLOYEE') {
-    return NextResponse.redirect(new URL('/admin', request.url))
-  }
-
-  if (isEmployeeZone && role === 'EMPLOYEE' && !hubPayload && hasCrmSession) {
-    return NextResponse.redirect(new URL('/employee/crm', request.url))
   }
 
   return NextResponse.next()

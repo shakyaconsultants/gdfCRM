@@ -10,6 +10,31 @@ export async function GET(req: NextRequest) {
   try {
     const leads = await db.lead.findMany({
       where: { assignedToId: gated.userId },
+      select: {
+        id: true,
+        title: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        address: true,
+        addressLine1: true,
+        addressLine2: true,
+        addressLine3: true,
+        addressLine4: true,
+        postCode: true,
+        phone: true,
+        disposition: true,
+        remarks: true,
+        employeeIntakeForm: true,
+        moveToAdvisor: true,
+        assignedAdvisorId: true,
+        closedSale: true,
+        verifiedSale: true,
+        paymentReceived: true,
+        caseStatus: true,
+        callbackAt: true,
+        updatedAt: true,
+      },
       orderBy: { assignedDate: 'desc' },
     })
 

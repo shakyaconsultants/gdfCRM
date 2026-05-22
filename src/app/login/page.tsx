@@ -114,7 +114,7 @@ export default function LoginPage() {
             </h1>
             <p className="text-neutral-400 mt-2">
               {step === 'credentials'
-                ? 'Sign in with your email and password.'
+                ? 'Team workspace — sign in with your email and password.'
                 : 'Enter the 6-digit code sent to the administrator email.'}
             </p>
           </div>

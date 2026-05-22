@@ -199,9 +199,9 @@ export default function CrmAccessPage() {
       </div>
 
       <p className="mt-6 text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
-        Looking for your workspace?{' '}
+        Looking for your team workspace?{' '}
         <Link href="/login" className="underline" style={{ color: 'rgba(245,194,107,0.5)' }}>
-          Sign in here
+          Team login
         </Link>
       </p>
     </div>

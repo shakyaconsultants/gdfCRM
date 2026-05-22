@@ -93,10 +93,23 @@ export default function AdminLeadsPage() {
     const seq = ++fetchSeqRef.current
     try {
       const [leadsRes, empRes] = await Promise.all([
-        fetch('/api/admin/leads', { cache: 'no-store' }),
-        fetch('/api/admin/employees', { cache: 'no-store' }),
+        fetch('/api/admin/leads', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/admin/employees', { cache: 'no-store', credentials: 'include' }),
       ])
       if (seq !== fetchSeqRef.current) return
+      if (!leadsRes.ok) {
+        const err = await leadsRes.json().catch(() => ({}))
+        setNotification({
+          message:
+            leadsRes.status === 401
+              ? 'Session expired — log in again as admin.'
+              : typeof err.error === 'string'
+                ? err.error
+                : `Failed to load leads (${leadsRes.status})`,
+          type: 'warn',
+        })
+        return
+      }
       const leadsData = await leadsRes.json()
       const empData = await empRes.json()
 

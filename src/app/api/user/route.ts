@@ -11,7 +11,8 @@ const secret = getJwtSecret()
 export async function GET(req: NextRequest) {
   const crmJwt = req.cookies.get(CRM_SESSION_COOKIE)?.value
   const token = req.cookies.get('token')?.value
-  const jwt = crmJwt ?? token
+  /** Prefer team token on workspace; CRM cookie when team session is absent. */
+  const jwt = token ?? crmJwt
 
   if (!jwt) {
     return NextResponse.json({ user: null }, { status: 401 })

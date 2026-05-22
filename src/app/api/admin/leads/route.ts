@@ -8,6 +8,38 @@ import { getJwtSecret } from '@/lib/jwt-secret'
 
 const secret = getJwtSecret()
 
+/** List view fields only — omit heavy JSON blobs so large lead pools load in production. */
+const ADMIN_LEAD_LIST_SELECT = {
+  id: true,
+  title: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+  address: true,
+  addressLine1: true,
+  addressLine2: true,
+  addressLine3: true,
+  addressLine4: true,
+  postCode: true,
+  phone: true,
+  assignedToId: true,
+  assignedAdvisorId: true,
+  assignedDate: true,
+  disposition: true,
+  remarks: true,
+  moveToAdvisor: true,
+  closedSale: true,
+  verifiedSale: true,
+  paymentReceived: true,
+  createdAt: true,
+  updatedAt: true,
+  assignedTo: { select: { name: true } },
+  assignedAdvisor: { select: { name: true } },
+} as const
+
+export const runtime = 'nodejs'
+export const maxDuration = 60
+
 function uniqStrings(input: unknown): string[] {
   if (!Array.isArray(input)) return []
   return Array.from(
@@ -24,17 +56,15 @@ export async function GET(req: NextRequest) {
     if (payload.role !== 'ADMIN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const leads = await db.lead.findMany({
-      include: { 
-        assignedTo: { select: { name: true } },
-        assignedAdvisor: { select: { name: true } }
-      },
+      select: ADMIN_LEAD_LIST_SELECT,
       orderBy: { createdAt: 'desc' },
     })
 
-    const response = NextResponse.json({ leads })
+    const response = NextResponse.json({ leads, total: leads.length })
     response.headers.set('Cache-Control', 'no-store')
     return response
   } catch (error) {
+    console.error('[admin/leads GET]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }
