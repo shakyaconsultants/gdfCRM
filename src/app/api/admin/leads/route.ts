@@ -68,7 +68,9 @@ function buildAdminLeadWhere(opts: {
   }
 
   if (opts.unassignedOnly) {
-    and.push({ assignedToId: null })
+    and.push({
+      OR: [{ assignedToId: null }, { assignedToId: { isSet: false } }],
+    })
   }
 
   if (opts.ids?.length) {
@@ -100,11 +102,15 @@ export async function GET(req: NextRequest) {
 
     const { searchParams } = new URL(req.url)
     const page = parsePositiveInt(searchParams.get('page'), 1)
-    const pageSize = parsePositiveInt(searchParams.get('pageSize'), 50, 100)
+    const idsOnly = searchParams.get('idsOnly') === 'true'
+    const pageSize = parsePositiveInt(
+      searchParams.get('pageSize'),
+      50,
+      idsOnly ? 5000 : 100
+    )
     const search = searchParams.get('search')?.trim() ?? ''
     const disposition = searchParams.get('disposition') ?? 'All'
     const unassignedOnly = searchParams.get('unassignedOnly') === 'true'
-    const idsOnly = searchParams.get('idsOnly') === 'true'
     const ids = uniqStrings(searchParams.get('ids')?.split(',') ?? [])
 
     const where = buildAdminLeadWhere({ search, disposition, unassignedOnly, ids: ids.length ? ids : undefined })

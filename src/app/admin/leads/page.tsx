@@ -408,11 +408,12 @@ export default function AdminLeadsPage() {
 
     setPageLoading(true)
     try {
-      const params = buildLeadsQuery({
-        page: 1,
-        pageSize: count,
-        idsOnly: true,
-        unassignedOnly: true,
+      // Search the full unassigned pool — not the current search/disposition/selection filters.
+      const params = new URLSearchParams({
+        page: '1',
+        pageSize: String(count),
+        idsOnly: 'true',
+        unassignedOnly: 'true',
       })
       const res = await fetch(`/api/admin/leads?${params.toString()}`, {
         cache: 'no-store',
@@ -420,14 +421,15 @@ export default function AdminLeadsPage() {
       })
       const data = await res.json().catch(() => ({}))
       const ids: string[] = res.ok && Array.isArray(data.ids) ? data.ids : []
+      const poolTotal = typeof data.total === 'number' ? data.total : ids.length
 
       setSelectedLeads(new Set(ids))
       setCommonQty('')
       setNotification({
         message:
           ids.length > 0
-            ? `Selected ${ids.length} unassigned lead(s)`
-            : 'No unassigned leads in this list — clear filters or import fresh data',
+            ? `Selected ${ids.length} unassigned lead(s) from ${poolTotal.toLocaleString()} in the pool (newest first)`
+            : 'No unassigned leads in the system — import fresh data or reassign from employees',
         type: ids.length > 0 ? 'success' : 'warn',
       })
     } finally {
