@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Navigation from '@/components/Navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Upload, Check, Save, Loader2, ChevronDown, ChevronRight, MessageSquare, AlertTriangle, Search, Filter, Trash2, Copy, TrendingUp } from 'lucide-react'
@@ -8,7 +8,6 @@ import Papa from 'papaparse'
 import { readSheet } from 'read-excel-file/browser'
 import { LEAD_PHONE_HELP_TEXT, parseLeadPhoneForStorage } from '@/lib/phone'
 import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
-import { isTotallyUnassignedLead } from '@/lib/lead-assignment'
 
 type Employee = { id: string; name: string; email: string }
 type Lead = {
@@ -49,12 +48,15 @@ export default function AdminLeadsPage() {
   const [assigning, setAssigning] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [pageLoading, setPageLoading] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [filterDisposition, setFilterDisposition] = useState('All')
   const [commonQty, setCommonQty] = useState<number | ''>('')
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'warn' } | null>(null)
   
   const [currentPage, setCurrentPage] = useState(1)
+  const [totalLeads, setTotalLeads] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
   const pageSize = 50
   const [displaySearchTerm, setDisplaySearchTerm] = useState('')
   const [showSelectedOnly, setShowSelectedOnly] = useState(false)
@@ -62,6 +64,34 @@ export default function AdminLeadsPage() {
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
   const fetchSeqRef = useRef(0)
   const pausePollRef = useRef(false)
+  const selectedLeadsRef = useRef(selectedLeads)
+  selectedLeadsRef.current = selectedLeads
+
+  const selectedIdsKey = showSelectedOnly
+    ? Array.from(selectedLeads).sort().join(',')
+    : ''
+
+  const buildLeadsQuery = useCallback(
+    (overrides?: {
+      page?: number
+      pageSize?: number
+      idsOnly?: boolean
+      unassignedOnly?: boolean
+    }) => {
+      const params = new URLSearchParams()
+      params.set('page', String(overrides?.page ?? currentPage))
+      params.set('pageSize', String(overrides?.pageSize ?? pageSize))
+      if (searchTerm) params.set('search', searchTerm)
+      if (filterDisposition !== 'All') params.set('disposition', filterDisposition)
+      if (overrides?.unassignedOnly) params.set('unassignedOnly', 'true')
+      if (overrides?.idsOnly) params.set('idsOnly', 'true')
+      if (showSelectedOnly && selectedLeadsRef.current.size > 0) {
+        params.set('ids', Array.from(selectedLeadsRef.current).join(','))
+      }
+      return params
+    },
+    [currentPage, pageSize, searchTerm, filterDisposition, showSelectedOnly]
+  )
 
   const toRecordRows = async (file: File): Promise<Record<string, unknown>[]> => {
     const lowerName = file.name.toLowerCase()
@@ -89,45 +119,80 @@ export default function AdminLeadsPage() {
     })
   }
 
-  const fetchData = async () => {
-    const seq = ++fetchSeqRef.current
-    try {
-      const [leadsRes, empRes] = await Promise.all([
-        fetch('/api/admin/leads', { cache: 'no-store', credentials: 'include' }),
-        fetch('/api/admin/employees', { cache: 'no-store', credentials: 'include' }),
-      ])
-      if (seq !== fetchSeqRef.current) return
-      if (!leadsRes.ok) {
-        const err = await leadsRes.json().catch(() => ({}))
-        setNotification({
-          message:
-            leadsRes.status === 401
-              ? 'Session expired — log in again as admin.'
-              : typeof err.error === 'string'
-                ? err.error
-                : `Failed to load leads (${leadsRes.status})`,
-          type: 'warn',
-        })
+  const fetchLeads = useCallback(
+    async (opts?: { silent?: boolean; page?: number }) => {
+      if (showSelectedOnly && selectedLeadsRef.current.size === 0) {
+        setLeads([])
+        setTotalLeads(0)
+        setTotalPages(1)
+        setLoading(false)
+        setPageLoading(false)
         return
       }
-      const leadsData = await leadsRes.json()
-      const empData = await empRes.json()
 
-      if (leadsData.leads) setLeads(leadsData.leads)
+      const seq = ++fetchSeqRef.current
+      if (opts?.silent) setPageLoading(true)
+      else setLoading(true)
+
+      try {
+        const params = buildLeadsQuery({ page: opts?.page ?? currentPage })
+        const leadsRes = await fetch(`/api/admin/leads?${params.toString()}`, {
+          cache: 'no-store',
+          credentials: 'include',
+        })
+        if (seq !== fetchSeqRef.current) return
+        if (!leadsRes.ok) {
+          const err = await leadsRes.json().catch(() => ({}))
+          setNotification({
+            message:
+              leadsRes.status === 401
+                ? 'Session expired — log in again as admin.'
+                : typeof err.error === 'string'
+                  ? err.error
+                  : `Failed to load leads (${leadsRes.status})`,
+            type: 'warn',
+          })
+          return
+        }
+        const leadsData = await leadsRes.json()
+        if (leadsData.leads) setLeads(leadsData.leads)
+        if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
+        if (typeof leadsData.totalPages === 'number') setTotalPages(leadsData.totalPages)
+      } finally {
+        if (seq === fetchSeqRef.current) {
+          setLoading(false)
+          setPageLoading(false)
+        }
+      }
+    },
+    [buildLeadsQuery, currentPage, showSelectedOnly, selectedIdsKey]
+  )
+
+  const fetchEmployees = useCallback(async () => {
+    try {
+      const empRes = await fetch('/api/admin/employees', { cache: 'no-store', credentials: 'include' })
+      const empData = await empRes.json()
       if (empData.employees) setEmployees(empData.employees)
-    } finally {
-      if (seq === fetchSeqRef.current) setLoading(false)
+    } catch {
+      /* employees list is non-blocking */
     }
-  }
+  }, [])
 
   useEffect(() => {
-    void fetchData()
+    void fetchEmployees()
+  }, [fetchEmployees])
+
+  useEffect(() => {
+    void fetchLeads()
+  }, [fetchLeads])
+
+  useEffect(() => {
     const interval = setInterval(() => {
       if (pausePollRef.current) return
-      void fetchData()
+      void fetchLeads({ silent: true })
     }, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [fetchLeads])
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -137,24 +202,9 @@ export default function AdminLeadsPage() {
     return () => clearTimeout(timer)
   }, [displaySearchTerm])
 
-  const filteredLeads = useMemo(() => {
-    return leads.filter(lead => {
-      if (showSelectedOnly && !selectedLeads.has(lead.id)) return false
-      const nameMatch = (lead.firstName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-                       (lead.lastName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                       (lead.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                       lead.phone.includes(searchTerm)
-      const dispositionMatch = filterDisposition === 'All' || lead.disposition === filterDisposition
-      return nameMatch && dispositionMatch
-    })
-  }, [leads, searchTerm, filterDisposition, showSelectedOnly, selectedLeads])
-
-  const paginatedLeads = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    return filteredLeads.slice(start, start + pageSize)
-  }, [filteredLeads, currentPage])
-
-  const totalPages = Math.ceil(filteredLeads.length / pageSize)
+  const pageStart = totalLeads === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const pageEnd = Math.min(currentPage * pageSize, totalLeads)
+  const allFilteredSelected = totalLeads > 0 && selectedLeads.size === totalLeads
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -234,7 +284,8 @@ export default function AdminLeadsPage() {
               : null,
           ].filter(Boolean)
           setNotification({ message: `${parts.join('. ')}.`, type: 'success' })
-          fetchData()
+          setCurrentPage(1)
+          void fetchLeads({ page: 1 })
       } catch (parseErr: any) {
           setNotification({
             message: parseErr?.message ?? 'Failed to parse file',
@@ -274,18 +325,18 @@ export default function AdminLeadsPage() {
       const payload = await res.json().catch(() => ({}))
       if (res.ok) {
         setSelectedLeads(new Set())
-        await fetchData()
+        await fetchLeads()
         setNotification({
           message: `Assigned ${payload.updatedCount ?? ids.length} lead(s) to ${payload.assignedToName ?? employee?.name ?? 'employee'}`,
           type: 'success',
         })
       } else {
-        await fetchData()
+        await fetchLeads()
         setNotification({ message: payload.error || 'Failed to assign leads', type: 'warn' })
       }
     } catch (e) {
       console.error(e)
-      await fetchData()
+      await fetchLeads()
       setNotification({ message: 'Failed to assign leads', type: 'warn' })
     } finally {
       pausePollRef.current = false
@@ -306,7 +357,7 @@ export default function AdminLeadsPage() {
       const payload = await res.json().catch(() => ({}))
       if (res.ok) {
         setSelectedLeads(new Set())
-        fetchData()
+        void fetchLeads()
         setNotification({ message: `Leads deleted (${payload.deletedCount ?? 0})`, type: 'success' })
       } else {
         setNotification({ message: payload.error || 'Failed to delete leads', type: 'warn' })
@@ -322,27 +373,66 @@ export default function AdminLeadsPage() {
     setSelectedLeads(next)
   }
 
-  const toggleSelectAll = () => {
-    if (selectedLeads.size === filteredLeads.length) setSelectedLeads(new Set())
-    else setSelectedLeads(new Set(filteredLeads.map(l => l.id)))
+  const toggleSelectAll = async () => {
+    if (allFilteredSelected) {
+      setSelectedLeads(new Set())
+      return
+    }
+
+    setPageLoading(true)
+    try {
+      const params = buildLeadsQuery({ page: 1, pageSize: 5000, idsOnly: true })
+      const res = await fetch(`/api/admin/leads?${params.toString()}`, {
+        cache: 'no-store',
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && Array.isArray(data.ids)) {
+        setSelectedLeads(new Set(data.ids))
+        const capped = typeof data.total === 'number' && data.total > data.ids.length
+        setNotification({
+          message: capped
+            ? `Selected ${data.ids.length} of ${data.total} matching leads (5,000 cap)`
+            : `Selected ${data.ids.length} lead(s) matching filters`,
+          type: 'success',
+        })
+      }
+    } finally {
+      setPageLoading(false)
+    }
   }
 
-  const handleAutoSelect = () => {
+  const handleAutoSelect = async () => {
     const count = Number(commonQty)
     if (isNaN(count) || count <= 0) return
-    
-    const unassignedOnly = filteredLeads.filter(isTotallyUnassignedLead)
-    const toSelect = unassignedOnly.slice(0, count).map((l) => l.id)
 
-    setSelectedLeads(new Set(toSelect))
-    setCommonQty('')
-    setNotification({
-      message:
-        toSelect.length > 0
-          ? `Selected ${toSelect.length} unassigned lead(s)`
-          : 'No unassigned leads in this list — clear filters or import fresh data',
-      type: toSelect.length > 0 ? 'success' : 'warn',
-    })
+    setPageLoading(true)
+    try {
+      const params = buildLeadsQuery({
+        page: 1,
+        pageSize: count,
+        idsOnly: true,
+        unassignedOnly: true,
+      })
+      const res = await fetch(`/api/admin/leads?${params.toString()}`, {
+        cache: 'no-store',
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      const ids: string[] = res.ok && Array.isArray(data.ids) ? data.ids : []
+
+      setSelectedLeads(new Set(ids))
+      setCommonQty('')
+      setNotification({
+        message:
+          ids.length > 0
+            ? `Selected ${ids.length} unassigned lead(s)`
+            : 'No unassigned leads in this list — clear filters or import fresh data',
+        type: ids.length > 0 ? 'success' : 'warn',
+      })
+    } finally {
+      setPageLoading(false)
+    }
   }
 
   const updateLead = async (id: string, updates: Partial<Lead>, immediate = false) => {
@@ -393,7 +483,7 @@ export default function AdminLeadsPage() {
                 <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
                 <select 
                   value={filterDisposition}
-                  onChange={e => setFilterDisposition(e.target.value)}
+                  onChange={e => { setFilterDisposition(e.target.value); setCurrentPage(1) }}
                   className="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg pl-10 pr-4 py-2 text-sm appearance-none transition-all uppercase"
                 >
                   {DISPOSITIONS.map(d => <option key={d} value={d}>{d}</option>)}
@@ -462,13 +552,16 @@ export default function AdminLeadsPage() {
           </div>
         </div>
 
-        <div className="bg-neutral-900/50 border border-neutral-800 rounded-2xl overflow-hidden backdrop-blur-sm shadow-xl">
+        <div className="bg-neutral-900/50 border border-neutral-800 rounded-2xl overflow-hidden backdrop-blur-sm shadow-xl relative">
+          {pageLoading && !loading && (
+            <div className="absolute inset-x-0 top-0 z-10 h-0.5 bg-blue-500/80 animate-pulse" />
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
                 <tr className="border-b border-neutral-800 bg-neutral-900/80 text-[10px] uppercase tracking-wider text-neutral-400">
                   <th className="p-4 w-10"></th>
-                  <th className="p-4 w-10"><input type="checkbox" checked={filteredLeads.length > 0 && selectedLeads.size === filteredLeads.length} onChange={toggleSelectAll} className="rounded border-neutral-700 bg-neutral-800 text-blue-600" /></th>
+                  <th className="p-4 w-10"><input type="checkbox" checked={allFilteredSelected} onChange={() => void toggleSelectAll()} className="rounded border-neutral-700 bg-neutral-800 text-blue-600" /></th>
                   <th className="p-4">Title</th>
                   <th className="p-4">First Name</th>
                   <th className="p-4">Last Name</th>
@@ -485,10 +578,10 @@ export default function AdminLeadsPage() {
               <tbody className="divide-y divide-neutral-800/50">
                 {loading ? (
                    <tr><td colSpan={13} className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto" /></td></tr>
-                ) : filteredLeads.length === 0 ? (
+                ) : leads.length === 0 ? (
                   <tr><td colSpan={13} className="p-8 text-center text-neutral-500 uppercase font-bold text-xs">No leads found</td></tr>
                 ) : (
-                  paginatedLeads.map(lead => (
+                  leads.map(lead => (
                     <motion.tr key={lead.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`hover:bg-neutral-800/30 transition-colors ${expandedId === lead.id ? 'bg-neutral-800/20' : ''}`}>
                       <td className="p-4 text-center"><button onClick={() => setExpandedId(expandedId === lead.id ? null : lead.id)}>{expandedId === lead.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</button></td>
                       <td className="p-4"><input type="checkbox" checked={selectedLeads.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-neutral-700 bg-neutral-800" /></td>
@@ -514,12 +607,19 @@ export default function AdminLeadsPage() {
             </table>
           </div>
           {totalPages > 1 && (
-            <div className="bg-neutral-900/80 border-t border-neutral-800 p-4 flex items-center justify-between">
-              <div className="text-[10px] text-neutral-500 font-bold uppercase">PAGE {currentPage} OF {totalPages}</div>
-              <div className="flex gap-2">
-                <button disabled={currentPage === 1} onClick={() => setCurrentPage(prev => prev - 1)} className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700">PREV</button>
-                <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(prev => prev + 1)} className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700">NEXT</button>
+            <div className="bg-neutral-900/80 border-t border-neutral-800 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="text-[10px] text-neutral-500 font-bold uppercase">
+                Showing {pageStart}–{pageEnd} of {totalLeads.toLocaleString()} · Page {currentPage} of {totalPages}
               </div>
+              <div className="flex gap-2">
+                <button disabled={currentPage === 1 || pageLoading} onClick={() => setCurrentPage(prev => prev - 1)} className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700">PREV</button>
+                <button disabled={currentPage === totalPages || pageLoading} onClick={() => setCurrentPage(prev => prev + 1)} className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700">NEXT</button>
+              </div>
+            </div>
+          )}
+          {totalPages <= 1 && totalLeads > 0 && (
+            <div className="bg-neutral-900/80 border-t border-neutral-800 p-4 text-[10px] text-neutral-500 font-bold uppercase">
+              {totalLeads.toLocaleString()} lead{totalLeads === 1 ? '' : 's'} total
             </div>
           )}
         </div>
