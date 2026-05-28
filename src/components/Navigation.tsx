@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { LogOut, User, Menu, X } from 'lucide-react'
 import Link from 'next/link'
+import { USER_CACHE_KEY, clearUserSessionCache } from '@/lib/auth-session'
 
 const ADMIN_NAV_LINKS = [
   { href: '/admin', label: 'Dashboard', exact: true },
@@ -24,7 +25,6 @@ function adminLinkActive(pathname: string, href: string, exact?: boolean) {
 
 
 export default function Navigation() {
-  const router = useRouter()
   const pathname = usePathname()
   const [user, setUser] = useState<{
     name: string
@@ -38,13 +38,12 @@ export default function Navigation() {
     pathname === '/employee/crm' || pathname.startsWith('/employee/crm/')
 
   useEffect(() => {
-    const CACHE_KEY = 'gdf:user-cache'
     const CACHE_TTL_MS = 5 * 60 * 1000
 
     const load = (skipCache = false) => {
       if (!skipCache && typeof sessionStorage !== 'undefined') {
         try {
-          const raw = sessionStorage.getItem(CACHE_KEY)
+          const raw = sessionStorage.getItem(USER_CACHE_KEY)
           if (raw) {
             const { user: cached, at } = JSON.parse(raw) as {
               user: { name: string; role: string; profileImageUrl?: string | null; crmAccess?: boolean }
@@ -66,7 +65,7 @@ export default function Navigation() {
             setUser(data.user)
             try {
               sessionStorage.setItem(
-                CACHE_KEY,
+                USER_CACHE_KEY,
                 JSON.stringify({ user: data.user, at: Date.now() })
               )
             } catch {
@@ -90,9 +89,16 @@ export default function Navigation() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scope: logoutScope }),
     })
+    clearUserSessionCache()
+    setUser(null)
     setMobileOpen(false)
-    router.push(logoutScope === 'crm' ? '/crm-access' : '/login')
+    const dest = logoutScope === 'crm' ? '/crm-access' : '/login'
+    window.location.replace(dest)
   }
+
+  const showEmployeeNav = user?.role === 'EMPLOYEE' && !isAdminContext
+  const showAdvisorNav = user?.role === 'ADVISOR' && !isAdminContext
+  const showAssessorNav = user?.role === 'CASE_ASSESSOR' && !isAdminContext
 
   return (
     <nav className="bg-neutral-950/95 backdrop-blur-md border-b border-neutral-800/80 sticky top-0 z-50">
@@ -131,24 +137,24 @@ export default function Navigation() {
                 })}
               </div>
             )}
-            {user?.role === 'CASE_ASSESSOR' && (
+            {showAssessorNav && (
               <div className="hidden md:flex items-center space-x-4 ml-6 pl-6 border-l border-neutral-800 text-sm">
                 <Link href="/case-assessor" className="text-cyan-500 hover:text-cyan-400 transition-colors">My cases</Link>
               </div>
             )}
-            {user?.role === 'ADVISOR' && (
+            {showAdvisorNav && (
               <div className="hidden md:flex items-center space-x-4 ml-6 pl-6 border-l border-neutral-800 text-sm">
                 <span className="text-amber-500 font-medium">Advisor Workspace</span>
               </div>
             )}
-            {user?.role === 'EMPLOYEE' && isEmployeeCrm && (
+            {showEmployeeNav && isEmployeeCrm && (
               <div className="hidden md:flex items-center ml-6 pl-6 border-l border-neutral-800 text-sm">
                 <span className="px-2.5 py-1.5 rounded-md bg-neutral-800 text-white font-medium">
                   CRM
                 </span>
               </div>
             )}
-            {user?.role === 'EMPLOYEE' && !isEmployeeCrm && (
+            {showEmployeeNav && !isEmployeeCrm && (
               <div className="hidden md:flex items-center gap-1 ml-6 pl-6 border-l border-neutral-800 text-sm">
                 {[
                   { href: '/employee', label: 'Workspace', exact: true },
@@ -241,14 +247,14 @@ export default function Navigation() {
               })}
             </div>
           )}
-          {user?.role === 'EMPLOYEE' && isEmployeeCrm && (
+          {showEmployeeNav && isEmployeeCrm && (
             <div className="px-2 pt-2 pb-3 border-t border-neutral-800">
               <span className="block px-3 py-2.5 text-sm font-medium rounded-md bg-neutral-800 text-white">
                 CRM
               </span>
             </div>
           )}
-          {user?.role === 'EMPLOYEE' && !isEmployeeCrm && (
+          {showEmployeeNav && !isEmployeeCrm && (
             <div className="px-2 pt-2 pb-3 space-y-0.5 border-t border-neutral-800">
               <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">Employee</p>
               {[
@@ -272,12 +278,12 @@ export default function Navigation() {
               ))}
             </div>
           )}
-          {user?.role === 'CASE_ASSESSOR' && (
+          {showAssessorNav && (
             <div className="px-2 pt-2 pb-3 space-y-1">
               <Link href="/case-assessor" className="block px-3 py-2 text-base font-medium text-cyan-500 hover:text-cyan-400 hover:bg-neutral-800 rounded-md">My cases</Link>
             </div>
           )}
-          {user?.role === 'ADVISOR' && (
+          {showAdvisorNav && (
             <div className="px-2 pt-2 pb-3 space-y-1">
               <span className="block px-3 py-2 text-base font-medium text-amber-500">Advisor Workspace</span>
             </div>

@@ -3,39 +3,33 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Navigation from '@/components/Navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Upload, Check, Save, Loader2, ChevronDown, ChevronRight, MessageSquare, AlertTriangle, Search, Filter, Trash2, Copy, TrendingUp } from 'lucide-react'
-import Papa from 'papaparse'
-import { readSheet } from 'read-excel-file/browser'
+import { Upload, Loader2, MessageSquare, Search, Filter, Trash2, TrendingUp } from 'lucide-react'
 import { LEAD_PHONE_HELP_TEXT, parseLeadPhoneForStorage } from '@/lib/phone'
 import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
+import { LeadSaveQueue } from '@/lib/lead-save-queue'
+import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
+import AdminLeadTableRow, { type AdminLeadRow } from '@/components/admin/AdminLeadTableRow'
 
 type Employee = { id: string; name: string; email: string }
-type Lead = {
-  id: string
-  title: string | null
-  firstName: string | null
-  lastName: string | null
-  email: string | null
+type Lead = AdminLeadRow & {
+  assignedToId?: string | null
+  remarks?: string | null
+}
+
+type LeadDetail = {
+  remarks: string | null
   address: string | null
   addressLine1: string | null
   addressLine2: string | null
   addressLine3: string | null
   addressLine4: string | null
   postCode: string | null
-  phone: string
-  assignedToId: string | null
   assignedTo: { name: string } | null
-  assignedAdvisorId: string | null
-  assignedAdvisor: { name: string } | null
-  disposition: string
-  remarks: string | null
-  moveToAdvisor: boolean
-  closedSale: boolean
-  verifiedSale: boolean
-  paymentReceived: boolean
-  updatedAt: string
 }
+
+const EMPLOYEES_CACHE_KEY = 'crm_admin_employees_v1'
+const EMPLOYEES_CACHE_MS = 5 * 60 * 1000
 
 const DISPOSITIONS = ['All', ...LEAD_DISPOSITIONS]
 
@@ -58,13 +52,17 @@ export default function AdminLeadsPage() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalLeads, setTotalLeads] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
-  const pageSize = 50
+  const pageSize = ADMIN_LEADS_PAGE_SIZE
   const [displaySearchTerm, setDisplaySearchTerm] = useState('')
   const [showSelectedOnly, setShowSelectedOnly] = useState(false)
+  const [expandedDetail, setExpandedDetail] = useState<LeadDetail | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
 
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const saveQueueRef = useRef(new LeadSaveQueue())
   const fetchSeqRef = useRef(0)
   const pausePollRef = useRef(false)
+  const listFilterKeyRef = useRef('')
+  const hasTotalForFilterRef = useRef(false)
   const selectedLeadsRef = useRef(selectedLeads)
   selectedLeadsRef.current = selectedLeads
 
@@ -78,6 +76,7 @@ export default function AdminLeadsPage() {
       pageSize?: number
       idsOnly?: boolean
       unassignedOnly?: boolean
+      skipTotal?: boolean
     }) => {
       const params = new URLSearchParams()
       params.set('page', String(overrides?.page ?? currentPage))
@@ -86,6 +85,10 @@ export default function AdminLeadsPage() {
       if (filterDisposition !== 'All') params.set('disposition', filterDisposition)
       if (overrides?.unassignedOnly) params.set('unassignedOnly', 'true')
       if (overrides?.idsOnly) params.set('idsOnly', 'true')
+      if (overrides?.skipTotal) {
+        params.set('skipTotal', 'true')
+        params.set('includeTotal', 'false')
+      }
       if (showSelectedOnly && selectedLeadsRef.current.size > 0) {
         params.set('ids', Array.from(selectedLeadsRef.current).join(','))
       }
@@ -97,6 +100,7 @@ export default function AdminLeadsPage() {
   const toRecordRows = async (file: File): Promise<Record<string, unknown>[]> => {
     const lowerName = file.name.toLowerCase()
     if (lowerName.endsWith('.csv')) {
+      const Papa = (await import('papaparse')).default
       const text = await file.text()
       const parsed = Papa.parse<Record<string, unknown>>(text, {
         header: true,
@@ -108,7 +112,8 @@ export default function AdminLeadsPage() {
       return parsed.data
     }
 
-    const rows = await readSheet(file)
+    const { default: readSheet } = await import('read-excel-file/browser')
+    const rows = (await readSheet(file)) as unknown as unknown[][]
     if (!rows.length) return []
     const header = rows[0].map((x) => String(x ?? '').trim())
     return rows.slice(1).map((row) => {
@@ -121,7 +126,7 @@ export default function AdminLeadsPage() {
   }
 
   const fetchLeads = useCallback(
-    async (opts?: { silent?: boolean; page?: number }) => {
+    async (opts?: { silent?: boolean; page?: number; forceTotal?: boolean }) => {
       if (showSelectedOnly && selectedLeadsRef.current.size === 0) {
         setLeads([])
         setTotalLeads(0)
@@ -135,8 +140,21 @@ export default function AdminLeadsPage() {
       if (opts?.silent) setPageLoading(true)
       else setLoading(true)
 
+      const filterKey = `${searchTerm}|${filterDisposition}|${showSelectedOnly}|${selectedIdsKey}`
+      const sameFilter = listFilterKeyRef.current === filterKey
+      if (!sameFilter) {
+        listFilterKeyRef.current = filterKey
+        hasTotalForFilterRef.current = false
+      }
+      const skipTotal =
+        opts?.silent ||
+        (sameFilter && hasTotalForFilterRef.current && !opts?.forceTotal)
+
       try {
-        const params = buildLeadsQuery({ page: opts?.page ?? currentPage })
+        const params = buildLeadsQuery({
+          page: opts?.page ?? currentPage,
+          skipTotal,
+        })
         const leadsRes = await fetch(`/api/admin/leads?${params.toString()}`, {
           cache: 'no-store',
           credentials: 'include',
@@ -156,9 +174,26 @@ export default function AdminLeadsPage() {
           return
         }
         const leadsData = await leadsRes.json()
-        if (leadsData.leads) setLeads(leadsData.leads)
-        if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
-        if (typeof leadsData.totalPages === 'number') setTotalPages(leadsData.totalPages)
+        if (leadsData.leads) {
+          const skipIds = opts?.silent ? saveQueueRef.current.pendingLeadIds() : null
+          if (skipIds?.size) {
+            setLeads((prev) => {
+              const prevById = new Map(prev.map((l) => [l.id, l]))
+              return (leadsData.leads as Lead[]).map((l) =>
+                skipIds.has(l.id) ? (prevById.get(l.id) ?? l) : l
+              )
+            })
+          } else {
+            setLeads(leadsData.leads)
+          }
+        }
+        if (typeof leadsData.total === 'number') {
+          hasTotalForFilterRef.current = true
+          setTotalLeads(leadsData.total)
+          setTotalPages(
+            leadsData.totalPages ?? Math.max(1, Math.ceil(leadsData.total / pageSize))
+          )
+        }
       } finally {
         if (seq === fetchSeqRef.current) {
           setLoading(false)
@@ -171,9 +206,34 @@ export default function AdminLeadsPage() {
 
   const fetchEmployees = useCallback(async () => {
     try {
+      if (typeof sessionStorage !== 'undefined') {
+        const raw = sessionStorage.getItem(EMPLOYEES_CACHE_KEY)
+        if (raw) {
+          const cached = JSON.parse(raw) as { ts: number; employees: Employee[] }
+          if (Date.now() - cached.ts < EMPLOYEES_CACHE_MS && cached.employees?.length) {
+            setEmployees(cached.employees)
+            return
+          }
+        }
+      }
       const empRes = await fetch('/api/admin/employees', { cache: 'no-store', credentials: 'include' })
       const empData = await empRes.json()
-      if (empData.employees) setEmployees(empData.employees)
+      if (empData.employees) {
+        const slim: Employee[] = empData.employees.map((e: Employee) => ({
+          id: e.id,
+          name: e.name,
+          email: e.email,
+        }))
+        setEmployees(slim)
+        try {
+          sessionStorage.setItem(
+            EMPLOYEES_CACHE_KEY,
+            JSON.stringify({ ts: Date.now(), employees: slim })
+          )
+        } catch {
+          /* quota */
+        }
+      }
     } catch {
       /* employees list is non-blocking */
     }
@@ -198,9 +258,10 @@ export default function AdminLeadsPage() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
+      hasTotalForFilterRef.current = false
       setSearchTerm(displaySearchTerm)
       setCurrentPage(1)
-    }, 300)
+    }, 500)
     return () => clearTimeout(timer)
   }, [displaySearchTerm])
 
@@ -286,8 +347,9 @@ export default function AdminLeadsPage() {
               : null,
           ].filter(Boolean)
           setNotification({ message: `${parts.join('. ')}.`, type: 'success' })
+          hasTotalForFilterRef.current = false
           setCurrentPage(1)
-          void fetchLeads({ page: 1 })
+          void fetchLeads({ page: 1, forceTotal: true })
       } catch (parseErr: any) {
           setNotification({
             message: parseErr?.message ?? 'Failed to parse file',
@@ -312,7 +374,6 @@ export default function AdminLeadsPage() {
         ids.includes(l.id)
           ? {
               ...l,
-              assignedToId: selectedEmployeeId,
               assignedTo: employee ? { name: employee.name } : l.assignedTo,
             }
           : l
@@ -439,23 +500,61 @@ export default function AdminLeadsPage() {
     }
   }
 
-  const updateLead = async (id: string, updates: Partial<Lead>, immediate = false) => {
-    setLeads(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l))
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-    const performSave = async () => {
-      await fetch(`/api/admin/leads/${id}`, {
+  const saveLeadPatch = useCallback(
+    async (leadId: string, body: Record<string, unknown>) => {
+      const res = await fetch(`/api/admin/leads/${leadId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates)
+        body: JSON.stringify(body),
       })
+      const data = await res.json().catch(() => ({}))
+      return { ok: res.ok, status: res.status, data }
+    },
+    []
+  )
+
+  const updateLead = (id: string, updates: Partial<Lead>, immediate = false) => {
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...updates } : l)))
+    const body = updates as Record<string, unknown>
+    if (immediate) {
+      void saveQueueRef.current.enqueueNow(id, body, saveLeadPatch)
+    } else {
+      saveQueueRef.current.schedule(id, body, saveLeadPatch, 1000)
     }
-    if (immediate) performSave()
-    else timeoutRef.current = setTimeout(performSave, 1000)
   }
 
+  const openLeadDetail = useCallback(async (leadId: string) => {
+    setExpandedId(leadId)
+    setExpandedDetail(null)
+    setDetailLoading(true)
+    try {
+      const res = await fetch(`/api/admin/leads/${leadId}`, {
+        cache: 'no-store',
+        credentials: 'include',
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.lead) {
+        setExpandedDetail(data.lead as LeadDetail)
+      }
+    } finally {
+      setDetailLoading(false)
+    }
+  }, [])
+
+  const closeLeadDetail = () => {
+    setExpandedId(null)
+    setExpandedDetail(null)
+  }
+
+  const detailRemarks =
+    expandedDetail?.remarks ?? leads.find((l) => l.id === expandedId)?.remarks ?? ''
+
   const forceSave = (id: string) => {
-    const lead = leads.find(l => l.id === id)
-    if (lead) updateLead(id, { remarks: lead.remarks }, true)
+    const remarks = expandedDetail?.remarks ?? leads.find((l) => l.id === id)?.remarks ?? ''
+    if (remarks !== undefined) {
+      updateLead(id, { remarks }, true)
+      setExpandedDetail((d) => (d ? { ...d, remarks } : d))
+    }
   }
 
   return (
@@ -467,6 +566,9 @@ export default function AdminLeadsPage() {
           <div>
             <h1 className="text-2xl font-bold text-white">Manage Leads</h1>
             <p className="text-neutral-400 text-sm mt-1 uppercase">Central command for lead distribution and upload.</p>
+            <p className="text-neutral-600 text-[10px] mt-1 font-bold uppercase tracking-wider">
+              {ADMIN_LEADS_PAGE_SIZE} leads per page · server-paginated
+            </p>
             <p className="text-neutral-500 text-xs mt-2 normal-case">{LEAD_PHONE_HELP_TEXT}</p>
           </div>
           
@@ -487,7 +589,11 @@ export default function AdminLeadsPage() {
                 <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
                 <select 
                   value={filterDisposition}
-                  onChange={e => { setFilterDisposition(e.target.value); setCurrentPage(1) }}
+                  onChange={e => {
+                    hasTotalForFilterRef.current = false
+                    setFilterDisposition(e.target.value)
+                    setCurrentPage(1)
+                  }}
                   className="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg pl-10 pr-4 py-2 text-sm appearance-none transition-all uppercase"
                 >
                   {DISPOSITIONS.map(d => <option key={d} value={d}>{d}</option>)}
@@ -585,45 +691,65 @@ export default function AdminLeadsPage() {
                 ) : leads.length === 0 ? (
                   <tr><td colSpan={13} className="p-8 text-center text-neutral-500 uppercase font-bold text-xs">No leads found</td></tr>
                 ) : (
-                  leads.map(lead => (
-                    <motion.tr key={lead.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={`hover:bg-neutral-800/30 transition-colors ${expandedId === lead.id ? 'bg-neutral-800/20' : ''}`}>
-                      <td className="p-4 text-center"><button onClick={() => setExpandedId(expandedId === lead.id ? null : lead.id)}>{expandedId === lead.id ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</button></td>
-                      <td className="p-4"><input type="checkbox" checked={selectedLeads.has(lead.id)} onChange={() => toggleSelect(lead.id)} className="rounded border-neutral-700 bg-neutral-800" /></td>
-                      <td className="p-4 text-neutral-400 text-xs">{lead.title || '-'}</td>
-                      <td className="p-4 font-bold text-white">{lead.firstName}</td>
-                      <td className="p-4 text-neutral-300">{lead.lastName || '-'}</td>
-                      <td className="p-4 text-neutral-300 normal-case">{lead.email || '-'}</td>
-                      <td className="p-4 font-mono text-xs">
-                        <div className="flex items-center gap-2">{lead.phone}<button onClick={() => { navigator.clipboard.writeText(lead.phone); setNotification({ message: 'COPIED', type: 'success' }); setTimeout(() => setNotification(null), 1000); }}><Copy className="w-3 h-3 text-neutral-600 hover:text-white" /></button></div>
-                      </td>
-                      <td className="p-4 text-center text-xs font-bold text-neutral-500">{lead.assignedTo?.name || '-'}</td>
-                      <td className="p-4 text-center text-xs font-bold text-amber-500/70">{lead.assignedAdvisor?.name || '-'}</td>
-                      <td className="p-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${lead.disposition === 'New' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-neutral-500/10 text-neutral-500 border-neutral-500/20'}`}>{lead.disposition}</span>
-                      </td>
-                      <td className="p-4 text-center"><button onClick={() => setExpandedId(expandedId === lead.id ? null : lead.id)}><MessageSquare className="w-4 h-4 text-neutral-600 hover:text-blue-400" /></button></td>
-                      <td className="p-4 text-center"><input type="checkbox" checked={lead.verifiedSale} onChange={(e) => updateLead(lead.id, { verifiedSale: e.target.checked }, true)} className="rounded bg-neutral-800 text-blue-500" /></td>
-                      <td className="p-4 text-center"><input type="checkbox" checked={lead.paymentReceived} onChange={(e) => updateLead(lead.id, { paymentReceived: e.target.checked }, true)} className="rounded bg-neutral-800 text-purple-500" /></td>
-                    </motion.tr>
+                  leads.map((lead) => (
+                    <AdminLeadTableRow
+                      key={lead.id}
+                      lead={lead}
+                      expanded={expandedId === lead.id}
+                      selected={selectedLeads.has(lead.id)}
+                      onToggleExpand={() =>
+                        expandedId === lead.id ? closeLeadDetail() : void openLeadDetail(lead.id)
+                      }
+                      onToggleSelect={() => toggleSelect(lead.id)}
+                      onCopyPhone={(phone) => {
+                        void navigator.clipboard.writeText(phone)
+                        setNotification({ message: 'COPIED', type: 'success' })
+                        setTimeout(() => setNotification(null), 1000)
+                      }}
+                      onVerifiedChange={(checked) =>
+                        updateLead(lead.id, { verifiedSale: checked }, true)
+                      }
+                      onPaidChange={(checked) =>
+                        updateLead(lead.id, { paymentReceived: checked }, true)
+                      }
+                    />
                   ))
                 )}
               </tbody>
             </table>
           </div>
-          {totalPages > 1 && (
+          {!loading && (
             <div className="bg-neutral-900/80 border-t border-neutral-800 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="text-[10px] text-neutral-500 font-bold uppercase">
-                Showing {pageStart}–{pageEnd} of {totalLeads.toLocaleString()} · Page {currentPage} of {totalPages}
+                {totalLeads > 0 ? (
+                  <>
+                    Showing {pageStart}–{pageEnd} of {totalLeads.toLocaleString()} · {pageSize} per page
+                    {totalPages > 1 ? ` · Page ${currentPage} of ${totalPages}` : ''}
+                  </>
+                ) : (
+                  <>No leads · {pageSize} per page</>
+                )}
               </div>
-              <div className="flex gap-2">
-                <button disabled={currentPage === 1 || pageLoading} onClick={() => setCurrentPage(prev => prev - 1)} className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700">PREV</button>
-                <button disabled={currentPage === totalPages || pageLoading} onClick={() => setCurrentPage(prev => prev + 1)} className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700">NEXT</button>
-              </div>
-            </div>
-          )}
-          {totalPages <= 1 && totalLeads > 0 && (
-            <div className="bg-neutral-900/80 border-t border-neutral-800 p-4 text-[10px] text-neutral-500 font-bold uppercase">
-              {totalLeads.toLocaleString()} lead{totalLeads === 1 ? '' : 's'} total
+              {totalPages > 1 && (
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={currentPage === 1 || pageLoading}
+                    onClick={() => setCurrentPage((prev) => prev - 1)}
+                    className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700"
+                  >
+                    PREV
+                  </button>
+                  <button
+                    type="button"
+                    disabled={currentPage === totalPages || pageLoading}
+                    onClick={() => setCurrentPage((prev) => prev + 1)}
+                    className="px-4 py-1.5 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-30 rounded text-[10px] font-black border border-neutral-700"
+                  >
+                    NEXT
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -634,16 +760,30 @@ export default function AdminLeadsPage() {
             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="w-full max-w-2xl bg-neutral-900 border border-neutral-800 rounded-3xl shadow-2xl p-8">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="text-xl font-black text-white uppercase tracking-tight flex items-center gap-3"><MessageSquare className="w-6 h-6 text-blue-500" /> LEAD DETAILS</h3>
-                <button onClick={() => setExpandedId(null)} className="w-10 h-10 flex items-center justify-center rounded-full bg-neutral-800 hover:bg-red-500 text-white transition-all font-bold">×</button>
+                <button type="button" onClick={closeLeadDetail} className="w-10 h-10 flex items-center justify-center rounded-full bg-neutral-800 hover:bg-red-500 text-white transition-all font-bold">×</button>
               </div>
+              {detailLoading ? (
+                <div className="py-12 flex justify-center">
+                  <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+                </div>
+              ) : (
               <div className="grid md:grid-cols-2 gap-8">
                 <div className="space-y-4">
                   <p className="text-[10px] text-neutral-500 uppercase font-black tracking-widest">INTERNAL REMARKS</p>
-                  <textarea value={leads.find(l => l.id === expandedId)?.remarks || ''} onChange={(e) => updateLead(expandedId, { remarks: e.target.value })} placeholder="ADD NOTES..." className="w-full bg-neutral-950 p-5 rounded-2xl border border-neutral-800 text-neutral-300 text-sm min-h-[150px] focus:ring-2 focus:ring-blue-500/20 outline-none resize-none transition-all" />
-                  <button onClick={() => forceSave(expandedId!)} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all">FORCE SAVE</button>
+                  <textarea
+                    value={detailRemarks}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      updateLead(expandedId!, { remarks: v })
+                      setExpandedDetail((d) => (d ? { ...d, remarks: v } : d))
+                    }}
+                    placeholder="ADD NOTES..."
+                    className="w-full bg-neutral-950 p-5 rounded-2xl border border-neutral-800 text-neutral-300 text-sm min-h-[150px] focus:ring-2 focus:ring-blue-500/20 outline-none resize-none transition-all"
+                  />
+                  <button type="button" onClick={() => forceSave(expandedId!)} className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all">FORCE SAVE</button>
                 </div>
                 <div className="space-y-6">
-                  <div><p className="text-[10px] text-neutral-500 uppercase font-black mb-1">ASSIGNED AGENT</p><p className="text-white font-bold">{leads.find(l => l.id === expandedId)?.assignedTo?.name || 'NONE'}</p></div>
+                  <div><p className="text-[10px] text-neutral-500 uppercase font-black mb-1">ASSIGNED AGENT</p><p className="text-white font-bold">{expandedDetail?.assignedTo?.name || leads.find(l => l.id === expandedId)?.assignedTo?.name || 'NONE'}</p></div>
                   <div>
                     <p className="text-[10px] text-neutral-500 uppercase font-black mb-1">EMAIL</p>
                     <p className="text-white text-sm normal-case">{leads.find(l => l.id === expandedId)?.email || '-'}</p>
@@ -652,17 +792,18 @@ export default function AdminLeadsPage() {
                     <p className="text-[10px] text-neutral-500 uppercase font-black mb-1">ADDRESS</p>
                     <p className="text-white text-sm leading-relaxed normal-case">
                       {[
-                        leads.find(l => l.id === expandedId)?.addressLine1,
-                        leads.find(l => l.id === expandedId)?.addressLine2,
-                        leads.find(l => l.id === expandedId)?.addressLine3,
-                        leads.find(l => l.id === expandedId)?.addressLine4,
-                      ].filter(Boolean).join(', ') || leads.find(l => l.id === expandedId)?.address || '-'}
+                        expandedDetail?.addressLine1,
+                        expandedDetail?.addressLine2,
+                        expandedDetail?.addressLine3,
+                        expandedDetail?.addressLine4,
+                      ].filter(Boolean).join(', ') || expandedDetail?.address || '-'}
                       <br />
-                      {leads.find(l => l.id === expandedId)?.postCode || ''}
+                      {expandedDetail?.postCode || ''}
                     </p>
                   </div>
                 </div>
               </div>
+              )}
             </motion.div>
           </div>
         )}

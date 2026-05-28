@@ -6,34 +6,21 @@ import { db } from '@/lib/db'
 import { parseLeadPhoneForStorage } from '@/lib/phone'
 import { employeeAssignUpdate } from '@/lib/lead-assignment'
 import { getJwtSecret } from '@/lib/jwt-secret'
+import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
 
 const secret = getJwtSecret()
 
-/** List view fields only — omit heavy JSON blobs so large lead pools load in production. */
+/** Minimal fields for table — remarks/address loaded on row expand. */
 const ADMIN_LEAD_LIST_SELECT = {
   id: true,
   title: true,
   firstName: true,
   lastName: true,
   email: true,
-  address: true,
-  addressLine1: true,
-  addressLine2: true,
-  addressLine3: true,
-  addressLine4: true,
-  postCode: true,
   phone: true,
-  assignedToId: true,
-  assignedAdvisorId: true,
-  assignedDate: true,
   disposition: true,
-  remarks: true,
-  moveToAdvisor: true,
-  closedSale: true,
   verifiedSale: true,
   paymentReceived: true,
-  createdAt: true,
-  updatedAt: true,
   assignedTo: { select: { name: true } },
   assignedAdvisor: { select: { name: true } },
 } as const
@@ -103,28 +90,48 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
     const page = parsePositiveInt(searchParams.get('page'), 1)
     const idsOnly = searchParams.get('idsOnly') === 'true'
-    const pageSize = parsePositiveInt(
-      searchParams.get('pageSize'),
-      50,
-      idsOnly ? 5000 : 100
-    )
+    const skipTotal =
+      searchParams.get('skipTotal') === 'true' ||
+      searchParams.get('includeTotal') === 'false'
+
+    const pageSize = idsOnly
+      ? parsePositiveInt(searchParams.get('pageSize'), ADMIN_LEADS_PAGE_SIZE, 5000)
+      : ADMIN_LEADS_PAGE_SIZE
+
     const search = searchParams.get('search')?.trim() ?? ''
     const disposition = searchParams.get('disposition') ?? 'All'
     const unassignedOnly = searchParams.get('unassignedOnly') === 'true'
     const ids = uniqStrings(searchParams.get('ids')?.split(',') ?? [])
 
-    const where = buildAdminLeadWhere({ search, disposition, unassignedOnly, ids: ids.length ? ids : undefined })
+    const where = buildAdminLeadWhere({
+      search,
+      disposition,
+      unassignedOnly,
+      ids: ids.length ? ids : undefined,
+    })
 
-    const total = await db.lead.count({ where })
+    const skip = (page - 1) * pageSize
+    const take = pageSize
 
     if (idsOnly) {
-      const rows = await db.lead.findMany({
+      const rowsPromise = db.lead.findMany({
         where,
         select: { id: true },
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * pageSize,
-        take: pageSize,
+        skip,
+        take,
       })
+      if (skipTotal) {
+        const rows = await rowsPromise
+        const response = NextResponse.json({
+          ids: rows.map((r) => r.id),
+          page,
+          pageSize,
+        })
+        response.headers.set('Cache-Control', 'private, no-store')
+        return response
+      }
+      const [total, rows] = await Promise.all([db.lead.count({ where }), rowsPromise])
       const response = NextResponse.json({
         ids: rows.map((r) => r.id),
         total,
@@ -132,32 +139,49 @@ export async function GET(req: NextRequest) {
         pageSize,
         totalPages: Math.max(1, Math.ceil(total / pageSize)),
       })
-      response.headers.set('Cache-Control', 'no-store')
+      response.headers.set('Cache-Control', 'private, no-store')
       return response
     }
 
-    const leads = await db.lead.findMany({
+    const leadsPromise = db.lead.findMany({
       where,
       select: ADMIN_LEAD_LIST_SELECT,
       orderBy: { createdAt: 'desc' },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
+      skip,
+      take,
     })
+
+    if (skipTotal) {
+      const leads = await leadsPromise
+      const response = NextResponse.json({
+        leads,
+        page,
+        pageSize,
+        pageSizeFixed: ADMIN_LEADS_PAGE_SIZE,
+      })
+      response.headers.set('Cache-Control', 'private, no-store')
+      return response
+    }
+
+    const [total, leads] = await Promise.all([db.lead.count({ where }), leadsPromise])
 
     const response = NextResponse.json({
       leads,
       total,
       page,
       pageSize,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      pageSizeFixed: ADMIN_LEADS_PAGE_SIZE,
+      totalPages: Math.max(1, Math.ceil(total / ADMIN_LEADS_PAGE_SIZE)),
     })
-    response.headers.set('Cache-Control', 'no-store')
+    response.headers.set('Cache-Control', 'private, no-store')
     return response
   } catch (error) {
     console.error('[admin/leads GET]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }
+
+// POST, PUT, DELETE unchanged below...
 
 export async function POST(req: NextRequest) {
   const token = req.cookies.get('token')?.value
@@ -181,8 +205,9 @@ export async function POST(req: NextRequest) {
     let createdCount = 0
     let skippedCount = 0
 
-    // Filter out rows missing essential data
-    const validLeads = leadsData.filter((lead) => (lead.firstName || lead.lastName) && lead.phone != null && lead.phone !== '')
+    const validLeads = leadsData.filter(
+      (lead) => (lead.firstName || lead.lastName) && lead.phone != null && lead.phone !== ''
+    )
     skippedCount += leadsData.length - validLeads.length
 
     const phoneNumbers = validLeads
@@ -198,7 +223,6 @@ export async function POST(req: NextRequest) {
     const existingPhonesSet = new Set(existingLeads.map((l) => l.phone))
 
     const newLeadsToInsert = []
-
     const seenPhonesInCsv = new Set<string>()
 
     for (const lead of validLeads) {
@@ -225,26 +249,24 @@ export async function POST(req: NextRequest) {
           legacyAddress ||
           null
         newLeadsToInsert.push({
-            title: lead.title ? String(lead.title) : null,
-            firstName: lead.firstName ? String(lead.firstName) : '',
-            lastName: lead.lastName ? String(lead.lastName) : null,
-            email: lead.email ? String(lead.email).trim().toLowerCase() : null,
-            address: mergedAddress,
-            addressLine1: addressLine1 || null,
-            addressLine2: addressLine2 || null,
-            addressLine3: addressLine3 || null,
-            addressLine4: addressLine4 || null,
-            postCode: lead.postCode ? String(lead.postCode) : null,
-            phone: phoneStr,
-            remarks: lead.remarks ? String(lead.remarks) : null,
+          title: lead.title ? String(lead.title) : null,
+          firstName: lead.firstName ? String(lead.firstName) : '',
+          lastName: lead.lastName ? String(lead.lastName) : null,
+          email: lead.email ? String(lead.email).trim().toLowerCase() : null,
+          address: mergedAddress,
+          addressLine1: addressLine1 || null,
+          addressLine2: addressLine2 || null,
+          addressLine3: addressLine3 || null,
+          addressLine4: addressLine4 || null,
+          postCode: lead.postCode ? String(lead.postCode) : null,
+          phone: phoneStr,
+          remarks: lead.remarks ? String(lead.remarks) : null,
         })
       }
     }
 
     if (newLeadsToInsert.length > 0) {
-      await db.lead.createMany({
-        data: newLeadsToInsert,
-      })
+      await db.lead.createMany({ data: newLeadsToInsert })
       createdCount = newLeadsToInsert.length
     }
 
@@ -288,7 +310,6 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid employee selection' }, { status: 400 })
     }
 
-    // Only set owner + date — never clear assignment or reset disposition/intake on assign/transfer.
     const updated = await db.lead.updateMany({
       where: { id: { in: normalizedLeadIds } },
       data: employeeAssignUpdate(employee.id),
@@ -300,7 +321,7 @@ export async function PUT(req: NextRequest) {
       assignedToId: employee.id,
       assignedToName: employee.name,
     })
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }
@@ -320,11 +341,11 @@ export async function DELETE(req: NextRequest) {
     }
 
     const deleted = await db.lead.deleteMany({
-      where: { id: { in: normalizedLeadIds } }
+      where: { id: { in: normalizedLeadIds } },
     })
 
     return NextResponse.json({ success: true, deletedCount: deleted.count })
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }

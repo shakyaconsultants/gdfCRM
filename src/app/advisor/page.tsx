@@ -27,6 +27,7 @@ import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee-intake-form'
 import EmployeeIntakeFormEditor from '@/components/employee/EmployeeIntakeFormEditor'
 import { mergeLeadDeltas } from '@/lib/lead-sync-client'
+import { LeadSaveQueue } from '@/lib/lead-save-queue'
 
 type CaseAssessorOption = { id: string; name: string }
 
@@ -104,7 +105,7 @@ export default function AdminAdvisorPage() {
   })
   const lastSyncRef = useRef<string | null>(null)
 
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const saveQueueRef = useRef(new LeadSaveQueue())
   const [intakeDraft, setIntakeDraft] = useState<EmployeeIntakeForm | null>(null)
   const lastSavedIntake = useRef('')
   const restrictCopy = useRestrictCopy()
@@ -138,7 +139,8 @@ export default function AdminAdvisorPage() {
         const leadsData = await leadsRes.json().catch(() => ({}))
 
         if (opts?.poll && leadsData.deltas) {
-          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas))
+          const skipIds = saveQueueRef.current.pendingLeadIds()
+          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas as Lead[], { skipIds }))
           if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
           return
         }
@@ -192,23 +194,42 @@ export default function AdminAdvisorPage() {
   const pageStart = totalLeads === 0 ? 0 : (currentPage - 1) * pageSize + 1
   const pageEnd = Math.min(currentPage * pageSize, totalLeads)
 
-  const updateLead = async (id: string, updates: Partial<Lead>, immediate = false) => {
-    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...updates } : l)))
-
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-
-    const performSave = async () => {
-      await fetch(`/api/advisor/leads/${id}`, {
+  const saveLeadPatch = useCallback(
+    async (leadId: string, body: Record<string, unknown>) => {
+      const res = await fetch(`/api/advisor/leads/${leadId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
+        body: JSON.stringify(body),
       })
-    }
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.lead) {
+        setLeads((prev) =>
+          prev.map((l) =>
+            l.id === leadId
+              ? {
+                  ...l,
+                  ...body,
+                  updatedAt:
+                    typeof data.lead.updatedAt === 'string'
+                      ? data.lead.updatedAt
+                      : l.updatedAt,
+                }
+              : l
+          )
+        )
+      }
+      return { ok: res.ok, status: res.status, data }
+    },
+    []
+  )
 
+  const updateLead = (id: string, updates: Partial<Lead>, immediate = false) => {
+    setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...updates } : l)))
+    const body = updates as Record<string, unknown>
     if (immediate) {
-      performSave()
+      void saveQueueRef.current.enqueueNow(id, body, saveLeadPatch)
     } else {
-      timeoutRef.current = setTimeout(performSave, 1000)
+      saveQueueRef.current.schedule(id, body, saveLeadPatch, 1000)
     }
   }
 

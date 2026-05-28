@@ -107,6 +107,10 @@ model Lead {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   documents        LeadDocument[]
+
+  @@index([createdAt])
+  @@index([assignedToId])
+  @@index([disposition])
 }
 
 model LeadDocument {

@@ -24,6 +24,7 @@ import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 import { format, formatDistanceToNow } from 'date-fns'
 import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { mergeLeadDeltas } from '@/lib/lead-sync-client'
+import { LeadSaveQueue } from '@/lib/lead-save-queue'
 
 function formatLeadUpdated(iso: string | null | undefined) {
   if (!iso) return { relative: '—', full: '' }
@@ -87,7 +88,7 @@ export default function EmployeeCrmPanel() {
   const pageSize = 50
   const [displaySearchTerm, setDisplaySearchTerm] = useState('')
 
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const saveQueueRef = useRef(new LeadSaveQueue())
   const [formDraft, setFormDraft] = useState<EmployeeIntakeForm | null>(null)
   const lastSavedFormJson = useRef('')
   const intakeModalOpenRef = useRef(false)
@@ -186,7 +187,8 @@ export default function EmployeeCrmPanel() {
         ])
         const leadsData = await leadsRes.json()
         if (opts?.poll && leadsData.deltas) {
-          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas))
+          const skipIds = saveQueueRef.current.pendingLeadIds()
+          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas as Lead[], { skipIds }))
           if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
           return
         }
@@ -244,31 +246,30 @@ export default function EmployeeCrmPanel() {
     return dt.toISOString()
   }
 
-  const updateLead = async (id: string, updates: Partial<Lead>, immediate = false) => {
-    setSavingId(id)
-    setLeads((prev) =>
-      prev.map((l) =>
-        l.id === id ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l
-      )
-    )
-
-    if (timeoutRef.current) clearTimeout(timeoutRef.current)
-
-    const performSave = async () => {
+  const saveLeadPatch = useCallback(
+    async (leadId: string, body: Record<string, unknown>) => {
+      setSavingId(leadId)
       try {
-        const res = await fetch(`/api/employee/leads/${id}`, {
+        const res = await fetch(`/api/employee/leads/${leadId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updates),
+          body: JSON.stringify(body),
         })
         const data = await res.json().catch(() => ({}))
         if (res.ok && data.lead) {
           setLeads((prev) =>
             prev.map((l) =>
-              l.id === id
+              l.id === leadId
                 ? {
                     ...l,
-                    ...updates,
+                    disposition: data.lead.disposition ?? l.disposition,
+                    remarks: data.lead.remarks ?? l.remarks,
+                    moveToAdvisor: data.lead.moveToAdvisor ?? l.moveToAdvisor,
+                    assignedAdvisorId: data.lead.assignedAdvisorId ?? l.assignedAdvisorId,
+                    callbackAt:
+                      data.lead.callbackAt !== undefined
+                        ? data.lead.callbackAt
+                        : l.callbackAt,
                     updatedAt:
                       typeof data.lead.updatedAt === 'string'
                         ? data.lead.updatedAt
@@ -278,15 +279,26 @@ export default function EmployeeCrmPanel() {
             )
           )
         }
+        return { ok: res.ok, status: res.status, data }
       } finally {
-        setSavingId(null)
+        setSavingId((current) => (current === leadId ? null : current))
       }
-    }
+    },
+    []
+  )
 
+  const updateLead = (id: string, updates: Partial<Lead>, immediate = false) => {
+    setLeads((prev) =>
+      prev.map((l) =>
+        l.id === id ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l
+      )
+    )
+
+    const body = updates as Record<string, unknown>
     if (immediate) {
-      performSave()
+      void saveQueueRef.current.enqueueNow(id, body, saveLeadPatch)
     } else {
-      timeoutRef.current = setTimeout(performSave, 1000)
+      saveQueueRef.current.schedule(id, body, saveLeadPatch, 1000)
     }
   }
   
