@@ -8,6 +8,7 @@ import {
   monthBoundsUtc,
   weekdayCountInMonth,
 } from '@/lib/payroll-utils'
+import { getJwtSecret } from '@/lib/jwt-secret'
 
 type PayrollRow = {
   employeeId: string
@@ -24,7 +25,7 @@ type PayrollRow = {
   estimatedGross: number
 }
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET)
+const secret = getJwtSecret()
 
 export async function GET(req: NextRequest) {
   const token = req.cookies.get('token')?.value
@@ -52,38 +53,53 @@ export async function GET(req: NextRequest) {
       orderBy: { name: 'asc' },
     })
 
-    const rows: PayrollRow[] = []
+    const employeeIds = employees.map((e) => e.id)
 
-    for (const emp of employees) {
-      const verifiedCount = await db.lead.count({
-        where: {
-          assignedToId: emp.id,
-          verifiedSale: true,
-          updatedAt: { gte: start, lte: end },
-        },
-      })
+    const [verifiedGroups, attendanceRows] = await Promise.all([
+      employeeIds.length
+        ? db.lead.groupBy({
+            by: ['assignedToId'],
+            where: {
+              assignedToId: { in: employeeIds },
+              verifiedSale: true,
+              updatedAt: { gte: start, lte: end },
+            },
+            _count: { _all: true },
+          })
+        : Promise.resolve([]),
+      employeeIds.length
+        ? db.attendanceEntry.findMany({
+            where: {
+              userId: { in: employeeIds },
+              status: 'APPROVED',
+              dayKey: { startsWith: mk },
+            },
+            select: { userId: true, kind: true },
+          })
+        : Promise.resolve([]),
+    ])
+
+    const verifiedMap = new Map<string, number>()
+    for (const g of verifiedGroups) {
+      if (g.assignedToId) verifiedMap.set(g.assignedToId, g._count._all)
+    }
+
+    const attendanceMap = new Map<string, number>()
+    for (const a of attendanceRows) {
+      attendanceMap.set(a.userId, (attendanceMap.get(a.userId) ?? 0) + attendanceKindToUnits(a.kind))
+    }
+
+    const rows: PayrollRow[] = employees.map((emp) => {
+      const verifiedCount = verifiedMap.get(emp.id) ?? 0
       const incentive = incentiveForVerifiedSalesInMonth(verifiedCount)
-
-      const approvedAttendance = await db.attendanceEntry.findMany({
-        where: {
-          userId: emp.id,
-          status: 'APPROVED',
-          dayKey: { startsWith: mk },
-        },
-      })
-
-      let units = 0
-      for (const a of approvedAttendance) {
-        units += attendanceKindToUnits(a.kind)
-      }
-
+      const units = attendanceMap.get(emp.id) ?? 0
       const ratio = Math.min(Math.max(units, 0) / wd, 1)
       const base = emp.baseSalaryMonthly
       const baseEarn =
         base != null && Number.isFinite(base) ? Math.round(base * ratio * 100) / 100 : null
       const gross = (baseEarn ?? 0) + incentive
 
-      rows.push({
+      return {
         employeeId: emp.id,
         name: emp.name,
         email: emp.email,
@@ -96,8 +112,8 @@ export async function GET(req: NextRequest) {
         verifiedSalesInMonth: verifiedCount,
         monthlyIncentive: incentive,
         estimatedGross: Math.round(gross * 100) / 100,
-      })
-    }
+      }
+    })
 
     return NextResponse.json({
       year,

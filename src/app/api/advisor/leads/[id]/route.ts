@@ -4,8 +4,47 @@ import { jwtVerify } from 'jose'
 import { db } from '@/lib/db'
 import { parseEmployeeIntakeForm, addressHistoryMeetsFiveYears } from '@/lib/employee-intake-form'
 import type { Prisma } from '@prisma/client'
+import { getJwtSecret } from '@/lib/jwt-secret'
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET)
+const secret = getJwtSecret()
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const token = req.cookies.get('token')?.value
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  try {
+    const { payload } = await jwtVerify(token, secret)
+    const userId = payload.id as string
+    if (payload.role !== 'ADVISOR') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const { id } = await params
+    const lead = await db.lead.findFirst({
+      where: { id, assignedAdvisorId: userId, moveToAdvisor: true },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        remarks: true,
+        employeeIntakeForm: true,
+        closedSale: true,
+        verifiedSale: true,
+        caseStatus: true,
+        assignedCaseAssessorId: true,
+        preSipAt: true,
+        updatedAt: true,
+        assignedTo: { select: { name: true } },
+      },
+    })
+    if (!lead) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ lead })
+  } catch {
+    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+  }
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const token = req.cookies.get('token')?.value
@@ -16,13 +55,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const userId = payload.id as string
 
     if (payload.role !== 'ADVISOR') {
-       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     const { id } = await params
     const body = await req.json()
 
-    // Ensure it's assigned to this advisor
     const existing = await db.lead.findUnique({ where: { id } })
     if (existing?.assignedAdvisorId !== userId) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
@@ -37,6 +75,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       preSipAt?: Date | null
       employeeIntakeForm?: Prisma.InputJsonValue
       caseStatus?: string
+      updatedAt?: Date
     } = {}
 
     if (body.remarks !== undefined) data.remarks = body.remarks
@@ -79,6 +118,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
+    if (Object.keys(data).length > 0) {
+      data.updatedAt = new Date()
+    }
+
     if (Object.keys(data).length === 0) {
       const lead = await db.lead.findUnique({ where: { id } })
       return NextResponse.json({ success: true, lead })
@@ -87,6 +130,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const updated = await db.lead.update({
       where: { id },
       data,
+      select: {
+        id: true,
+        remarks: true,
+        closedSale: true,
+        verifiedSale: true,
+        caseStatus: true,
+        assignedCaseAssessorId: true,
+        preSipAt: true,
+        employeeIntakeForm: true,
+        updatedAt: true,
+      },
     })
 
     return NextResponse.json({ success: true, lead: updated })

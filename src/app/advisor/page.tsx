@@ -23,8 +23,10 @@ import {
   X,
 } from 'lucide-react'
 import { useRestrictCopy } from '@/hooks/useRestrictCopy'
-import { emptyEmployeeIntakeForm, parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee-intake-form'
+import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
+import { parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee-intake-form'
 import EmployeeIntakeFormEditor from '@/components/employee/EmployeeIntakeFormEditor'
+import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 
 type CaseAssessorOption = { id: string; name: string }
 
@@ -40,7 +42,6 @@ type Lead = {
   phone: string
   assignedTo: { name: string } | null
   remarks: string | null
-  employeeIntakeForm?: unknown
   closedSale: boolean
   verifiedSale: boolean
   caseStatus: string | null
@@ -90,48 +91,94 @@ export default function AdminAdvisorPage() {
   const replaceTargetDocIdRef = useRef<string | null>(null)
 
   const [currentPage, setCurrentPage] = useState(1)
+  const [totalLeads, setTotalLeads] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
   const pageSize = 50
   const [displaySearchTerm, setDisplaySearchTerm] = useState('')
+  const [advisorStats, setAdvisorStats] = useState({
+    transferredFromEmployee: 0,
+    dropped: 0,
+    forwardedToCaseAssessor: 0,
+    verified: 0,
+    clawback: 0,
+  })
+  const lastSyncRef = useRef<string | null>(null)
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
   const [intakeDraft, setIntakeDraft] = useState<EmployeeIntakeForm | null>(null)
   const lastSavedIntake = useRef('')
   const restrictCopy = useRestrictCopy()
 
-  const fetchData = async () => {
-    try {
-      const [leadsRes, assessorRes] = await Promise.all([
-        fetch('/api/advisor/leads'),
-        fetch('/api/advisor/case-assessors'),
-      ])
-      const leadsData = await leadsRes.json().catch(() => ({}))
-      const assessorData = await assessorRes.json().catch(() => ({}))
-
-      const problems: string[] = []
-      if (leadsRes.ok && Array.isArray(leadsData.leads)) setLeads(leadsData.leads)
-      else problems.push('leads')
-      if (assessorRes.ok && Array.isArray(assessorData.assessors)) setAssessors(assessorData.assessors)
-      else problems.push('case assessors')
-
-      if (problems.length > 0) {
-        setFetchWarning(`Temporary connection issue while loading ${problems.join(' and ')}. Retrying automatically.`)
+  const buildLeadsQuery = useCallback(
+    (opts?: { since?: string }) => {
+      const params = new URLSearchParams()
+      if (opts?.since) {
+        params.set('since', opts.since)
       } else {
-        setFetchWarning(null)
+        params.set('page', String(currentPage))
+        params.set('pageSize', String(pageSize))
+        params.set('stats', 'true')
+        if (searchTerm) params.set('search', searchTerm)
       }
-    } catch (error) {
-      // Handle transient browser/network fetch failures gracefully.
-      console.error('Advisor fetchData failed:', error)
-      setFetchWarning('Temporary network issue while loading advisor data. Retrying automatically.')
-    } finally {
-      setLoading(false)
-    }
-  }
+      return params.toString()
+    },
+    [currentPage, pageSize, searchTerm]
+  )
+
+  const fetchData = useCallback(
+    async (opts?: { poll?: boolean }) => {
+      try {
+        const qs = buildLeadsQuery(
+          opts?.poll && lastSyncRef.current ? { since: lastSyncRef.current } : undefined
+        )
+        const [leadsRes, assessorRes] = await Promise.all([
+          fetch(`/api/advisor/leads?${qs}`, { cache: 'no-store' }),
+          opts?.poll ? Promise.resolve(null) : fetch('/api/advisor/case-assessors', { cache: 'no-store' }),
+        ])
+        const leadsData = await leadsRes.json().catch(() => ({}))
+
+        if (opts?.poll && leadsData.deltas) {
+          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas))
+          if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
+          return
+        }
+
+        const problems: string[] = []
+        if (leadsRes.ok && Array.isArray(leadsData.leads)) {
+          setLeads(leadsData.leads)
+          if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
+          if (typeof leadsData.totalPages === 'number') setTotalPages(leadsData.totalPages)
+          if (leadsData.stats) setAdvisorStats(leadsData.stats)
+          if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
+        } else problems.push('leads')
+
+        if (assessorRes) {
+          const assessorData = await assessorRes.json().catch(() => ({}))
+          if (assessorRes.ok && Array.isArray(assessorData.assessors)) setAssessors(assessorData.assessors)
+          else problems.push('case assessors')
+        }
+
+        if (problems.length > 0) {
+          setFetchWarning(`Temporary connection issue while loading ${problems.join(' and ')}. Retrying automatically.`)
+        } else {
+          setFetchWarning(null)
+        }
+      } catch (error) {
+        console.error('Advisor fetchData failed:', error)
+        setFetchWarning('Temporary network issue while loading advisor data. Retrying automatically.')
+      } finally {
+        if (!opts?.poll) setLoading(false)
+      }
+    },
+    [buildLeadsQuery]
+  )
 
   useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    setLoading(true)
+    void fetchData()
+  }, [fetchData])
+
+  useVisibilityPolling(() => fetchData({ poll: true }), [fetchData], { intervalMs: 120_000 })
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -141,37 +188,9 @@ export default function AdminAdvisorPage() {
     return () => clearTimeout(timer)
   }, [displaySearchTerm])
 
-  const filteredLeads = useMemo(() => {
-    return leads.filter((lead) => {
-      const nameMatch =
-        (lead.firstName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (lead.lastName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        lead.phone.includes(searchTerm)
-      return nameMatch
-    })
-  }, [leads, searchTerm])
-
-  const advisorStats = useMemo(() => {
-    const transferredFromEmployee = leads.length
-    const dropped = leads.filter((l) => l.closedSale).length
-    const forwardedToCaseAssessor = leads.filter((l) => !!l.assignedCaseAssessorId).length
-    const verified = leads.filter((l) => l.verifiedSale).length
-    const clawback = leads.filter((l) => l.caseStatus === 'CLAWBACK').length
-    return {
-      transferredFromEmployee,
-      dropped,
-      forwardedToCaseAssessor,
-      verified,
-      clawback,
-    }
-  }, [leads])
-
-  const paginatedLeads = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    return filteredLeads.slice(start, start + pageSize)
-  }, [filteredLeads, currentPage])
-
-  const totalPages = Math.ceil(filteredLeads.length / pageSize)
+  const paginatedLeads = leads
+  const pageStart = totalLeads === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const pageEnd = Math.min(currentPage * pageSize, totalLeads)
 
   const updateLead = async (id: string, updates: Partial<Lead>, immediate = false) => {
     setLeads((prev) => prev.map((l) => (l.id === id ? { ...l, ...updates } : l)))
@@ -196,21 +215,31 @@ export default function AdminAdvisorPage() {
   const expandedLead = expandedId ? leads.find((l) => l.id === expandedId) : null
 
   useEffect(() => {
-    if (!expandedLead) {
+    if (!expandedId) {
       setIntakeDraft(null)
       return
     }
-    const parsed = parseEmployeeIntakeForm(expandedLead.employeeIntakeForm ?? null)
-    const resolvedName = [expandedLead.firstName, expandedLead.lastName].filter(Boolean).join(' ').trim()
-    if (!parsed.fullName && resolvedName) parsed.fullName = resolvedName
-    if (!parsed.callingNumber && expandedLead.phone) parsed.callingNumber = expandedLead.phone
-    if (!parsed.emailAddress && expandedLead.email) parsed.emailAddress = expandedLead.email
-    if (parsed.whatsappSameAsCalling && !parsed.whatsappNumber && parsed.callingNumber) {
-      parsed.whatsappNumber = parsed.callingNumber
-    }
-    setIntakeDraft(parsed)
-    lastSavedIntake.current = JSON.stringify(parsed)
-  }, [expandedLead?.id, expandedLead?.employeeIntakeForm])
+    const lead = leads.find((l) => l.id === expandedId)
+    if (!lead) return
+    void (async () => {
+      try {
+        const res = await fetch(`/api/advisor/leads/${expandedId}`, { cache: 'no-store' })
+        const data = await res.json()
+        const parsed = parseEmployeeIntakeForm(data.lead?.employeeIntakeForm ?? null)
+        const resolvedName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim()
+        if (!parsed.fullName && resolvedName) parsed.fullName = resolvedName
+        if (!parsed.callingNumber && lead.phone) parsed.callingNumber = lead.phone
+        if (!parsed.emailAddress && lead.email) parsed.emailAddress = lead.email
+        if (parsed.whatsappSameAsCalling && !parsed.whatsappNumber && parsed.callingNumber) {
+          parsed.whatsappNumber = parsed.callingNumber
+        }
+        setIntakeDraft(parsed)
+        lastSavedIntake.current = JSON.stringify(parsed)
+      } catch {
+        setIntakeDraft(parseEmployeeIntakeForm(null))
+      }
+    })()
+  }, [expandedId, leads])
 
   const persistIntake = useCallback(async () => {
     if (!expandedId || !intakeDraft) return
@@ -229,9 +258,7 @@ export default function AdminAdvisorPage() {
   }, [expandedId, intakeDraft, persistIntake])
 
   const refreshLeads = async () => {
-    const leadsRes = await fetch('/api/advisor/leads')
-    const leadsData = await leadsRes.json()
-    if (leadsData.leads) setLeads(leadsData.leads)
+    await fetchData()
   }
 
   const loadDocumentsForLead = async (leadId: string) => {
@@ -477,7 +504,7 @@ export default function AdminAdvisorPage() {
                       Loading leads...
                     </td>
                   </tr>
-                ) : filteredLeads.length === 0 ? (
+                ) : paginatedLeads.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="p-8 text-center text-neutral-500">
                       No leads found.
@@ -579,8 +606,7 @@ export default function AdminAdvisorPage() {
           {totalPages > 1 && (
             <div className="bg-neutral-900/80 border-t border-neutral-800 p-4 flex items-center justify-between gap-4">
               <div className="text-xs text-neutral-500">
-                Showing {Math.min(filteredLeads.length, (currentPage - 1) * pageSize + 1)} to{' '}
-                {Math.min(filteredLeads.length, currentPage * pageSize)} of {filteredLeads.length} leads
+                Showing {pageStart} to {pageEnd} of {totalLeads} leads
               </div>
               <div className="flex items-center gap-2">
                 <button

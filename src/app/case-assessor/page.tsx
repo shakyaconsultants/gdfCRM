@@ -18,6 +18,8 @@ import {
 import { useRestrictCopy } from '@/hooks/useRestrictCopy'
 import { CASE_STATUSES, parseCaseChecklist, type CaseChecklist } from '@/lib/lead-workflow'
 import { parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee-intake-form'
+import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
+import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 import EmployeeIntakeFormEditor from '@/components/employee/EmployeeIntakeFormEditor'
 
 type Lead = {
@@ -31,12 +33,12 @@ type Lead = {
   addressLine4: string | null
   phone: string
   caseStatus: string
-  caseChecklist?: unknown
   preSipAt: string | null
   assignedTo: { name: string } | null
   assignedAdvisor: { name: string } | null
   remarks: string | null
-  employeeIntakeForm?: unknown
+  updatedAt: string
+  hasChecklist?: boolean
   _count?: { documents: number }
 }
 
@@ -66,6 +68,11 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
 export default function CaseAssessorPage() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [loading, setLoading] = useState(true)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalLeads, setTotalLeads] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  const pageSize = 50
+  const lastSyncRef = useRef<string | null>(null)
   const [dateFrom, setDateFrom] = useState(() => format(subDays(new Date(), 30), 'yyyy-MM-dd'))
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'))
   const [activeRange, setActiveRange] = useState<{ from: string; to: string } | null>(null)
@@ -84,29 +91,48 @@ export default function CaseAssessorPage() {
   const restrictCopy = useRestrictCopy()
 
   const fetchLeads = useCallback(
-    async (opts?: { silent?: boolean }) => {
-      if (!opts?.silent) setLoading(true)
+    async (opts?: { silent?: boolean; poll?: boolean }) => {
+      if (!opts?.silent && !opts?.poll) setLoading(true)
       try {
-        const qs = dateFrom && dateTo ? `?from=${dateFrom}&to=${dateTo}` : ''
-        const res = await fetch(`/api/case-assessor/leads${qs}`)
+        const params = new URLSearchParams()
+        if (dateFrom && dateTo) {
+          params.set('from', dateFrom)
+          params.set('to', dateTo)
+        }
+        if (opts?.poll && lastSyncRef.current) {
+          params.set('since', lastSyncRef.current)
+        } else {
+          params.set('page', String(currentPage))
+          params.set('pageSize', String(pageSize))
+        }
+        const res = await fetch(`/api/case-assessor/leads?${params}`)
         const data = await res.json()
+        if (opts?.poll && data.deltas) {
+          setLeads((prev) => mergeLeadDeltas<Lead>(prev, data.deltas as Lead[]))
+          if (data.serverTime) lastSyncRef.current = data.serverTime
+          return
+        }
         if (data.leads) setLeads(data.leads)
+        if (typeof data.total === 'number') setTotalLeads(data.total)
+        if (typeof data.totalPages === 'number') setTotalPages(data.totalPages)
         setActiveRange(data.range ?? null)
+        if (data.serverTime) lastSyncRef.current = data.serverTime
       } finally {
-        if (!opts?.silent) setLoading(false)
+        if (!opts?.silent && !opts?.poll) setLoading(false)
       }
     },
-    [dateFrom, dateTo]
+    [dateFrom, dateTo, currentPage, pageSize]
   )
 
   useEffect(() => {
     void fetchLeads()
   }, [fetchLeads])
 
-  useEffect(() => {
-    const id = setInterval(() => void fetchLeads({ silent: true }), 30000)
-    return () => clearInterval(id)
-  }, [fetchLeads])
+  useVisibilityPolling(
+    () => fetchLeads({ silent: true, poll: true }),
+    [fetchLeads],
+    { intervalMs: 120_000 }
+  )
 
   const updateLead = async (
     id: string,
@@ -125,18 +151,25 @@ export default function CaseAssessorPage() {
     })
   }
 
-  const openChecklistModal = (lead: Lead) => {
+  const openChecklistModal = async (lead: Lead) => {
     setChecklistLeadId(lead.id)
-    setChecklistDraft(parseCaseChecklist(lead.caseChecklist ?? null))
-    const parsed = parseEmployeeIntakeForm(lead.employeeIntakeForm ?? null)
-    const resolvedName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim()
-    if (!parsed.fullName && resolvedName) parsed.fullName = resolvedName
-    if (!parsed.callingNumber && lead.phone) parsed.callingNumber = lead.phone
-    if (!parsed.emailAddress && lead.email) parsed.emailAddress = lead.email
-    if (parsed.whatsappSameAsCalling && !parsed.whatsappNumber && parsed.callingNumber) {
-      parsed.whatsappNumber = parsed.callingNumber
+    try {
+      const res = await fetch(`/api/case-assessor/leads/${lead.id}`, { cache: 'no-store' })
+      const data = await res.json()
+      setChecklistDraft(parseCaseChecklist(data.lead?.caseChecklist ?? null))
+      const parsed = parseEmployeeIntakeForm(data.lead?.employeeIntakeForm ?? null)
+      const resolvedName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim()
+      if (!parsed.fullName && resolvedName) parsed.fullName = resolvedName
+      if (!parsed.callingNumber && lead.phone) parsed.callingNumber = lead.phone
+      if (!parsed.emailAddress && lead.email) parsed.emailAddress = lead.email
+      if (parsed.whatsappSameAsCalling && !parsed.whatsappNumber && parsed.callingNumber) {
+        parsed.whatsappNumber = parsed.callingNumber
+      }
+      setIntakeDraft(parsed)
+    } catch {
+      setChecklistDraft(parseCaseChecklist(null))
+      setIntakeDraft(parseEmployeeIntakeForm(null))
     }
-    setIntakeDraft(parsed)
   }
   const closeChecklistModal = () => {
     setChecklistLeadId(null)
@@ -153,9 +186,7 @@ export default function CaseAssessorPage() {
       })
       setLeads((prev) =>
         prev.map((l) =>
-          l.id === checklistLeadId
-            ? { ...l, caseChecklist: checklistDraft, employeeIntakeForm: intakeDraft ?? l.employeeIntakeForm }
-            : l
+          l.id === checklistLeadId ? { ...l, hasChecklist: true } : l
         )
       )
       closeChecklistModal()
@@ -295,29 +326,8 @@ export default function CaseAssessorPage() {
       leadForDocuments.phone
     : ''
   const checklistLead = checklistLeadId ? leads.find((l) => l.id === checklistLeadId) : null
-  const checklistUsed = (input: unknown) => {
-    const c = parseCaseChecklist(input)
-    return Boolean(
-      c.incomeMonthly ||
-        c.employmentStatus ||
-        c.kidsDob.length ||
-        c.carRegistration ||
-        c.idProofType ||
-        c.debtLevel ||
-        c.debtPlan ||
-        c.notes ||
-        c.incomeEligible ||
-        c.payslipVerified ||
-        c.universalCreditStatementUploaded ||
-        c.universalCreditVisible ||
-        c.hasKids ||
-        c.hasCar ||
-        c.nonEnglish ||
-        c.rightToRemainUploaded ||
-        c.amlCheckRequired ||
-        c.threeWayCallCompleted
-    )
-  }
+  const pageStart = totalLeads === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const pageEnd = Math.min(currentPage * pageSize, totalLeads)
 
   return (
     <div
@@ -341,6 +351,7 @@ export default function CaseAssessorPage() {
             onAllTime={() => {
               setDateFrom('')
               setDateTo('')
+              setCurrentPage(1)
             }}
           />
           {activeRange ? (
@@ -420,12 +431,12 @@ export default function CaseAssessorPage() {
                       <td className="p-4 text-center">
                         <span
                           className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                            checklistUsed(l.caseChecklist)
+                            l.hasChecklist
                               ? 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/25'
                               : 'bg-neutral-800 text-neutral-400 ring-1 ring-neutral-700'
                           }`}
                         >
-                          {checklistUsed(l.caseChecklist) ? 'Used' : 'Not used'}
+                          {l.hasChecklist ? 'Used' : 'Not used'}
                         </span>
                       </td>
                       <td className="p-4 text-center">
@@ -454,6 +465,31 @@ export default function CaseAssessorPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          )}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t border-neutral-800 text-xs text-neutral-500">
+              <span>
+                Showing {pageStart}–{pageEnd} of {totalLeads}
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={currentPage === 1}
+                  onClick={() => setCurrentPage((p) => p - 1)}
+                  className="px-3 py-1.5 bg-neutral-800 rounded-md border border-neutral-700 disabled:opacity-30"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  disabled={currentPage === totalPages}
+                  onClick={() => setCurrentPage((p) => p + 1)}
+                  className="px-3 py-1.5 bg-neutral-800 rounded-md border border-neutral-700 disabled:opacity-30"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </div>

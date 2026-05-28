@@ -5,8 +5,46 @@ import { db } from '@/lib/db'
 import type { Prisma } from '@prisma/client'
 import { CASE_STATUSES, parseCaseChecklist } from '@/lib/lead-workflow'
 import { parseEmployeeIntakeForm, addressHistoryMeetsFiveYears } from '@/lib/employee-intake-form'
+import { getJwtSecret } from '@/lib/jwt-secret'
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET)
+const secret = getJwtSecret()
+
+export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const token = req.cookies.get('token')?.value
+  if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  try {
+    const { payload } = await jwtVerify(token, secret)
+    const userId = payload.id as string
+    if (payload.role !== 'CASE_ASSESSOR') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const { id } = await params
+    const lead = await db.lead.findFirst({
+      where: { id, assignedCaseAssessorId: userId },
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        phone: true,
+        caseStatus: true,
+        caseChecklist: true,
+        preSipAt: true,
+        remarks: true,
+        employeeIntakeForm: true,
+        updatedAt: true,
+        assignedTo: { select: { name: true } },
+        assignedAdvisor: { select: { name: true } },
+      },
+    })
+    if (!lead) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json({ lead })
+  } catch {
+    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+  }
+}
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const token = req.cookies.get('token')?.value
@@ -44,6 +82,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       employeeIntakeForm?: Prisma.InputJsonValue
       verifiedSale?: boolean
       verifiedAt?: Date | null
+      updatedAt?: Date
     } = {}
 
     if (body.caseStatus !== undefined) {
@@ -82,9 +121,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ success: true, lead: existing })
     }
 
+    data.updatedAt = new Date()
+
     const updated = await db.lead.update({
       where: { id },
       data,
+      select: {
+        id: true,
+        caseStatus: true,
+        caseChecklist: true,
+        preSipAt: true,
+        employeeIntakeForm: true,
+        updatedAt: true,
+      },
     })
 
     return NextResponse.json({ success: true, lead: updated })

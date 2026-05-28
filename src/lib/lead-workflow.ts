@@ -111,3 +111,20 @@ export function parseCaseChecklist(input: unknown): CaseChecklist {
     notes: typeof o.notes === 'string' ? o.notes : '',
   }
 }
+
+/** True if checklist has any meaningful field filled (for list badges without sending full JSON). */
+export function caseChecklistHasData(input: unknown): boolean {
+  const c = parseCaseChecklist(input)
+  return Boolean(
+    c.incomeMonthly ||
+      c.employmentStatus ||
+      c.kidsDob.length ||
+      c.carRegistration ||
+      c.idProofType ||
+      c.debtLevel ||
+      c.debtPlan ||
+      c.notes ||
+      c.incomeEligible ||
+      c.payslipVerified
+  )
+}

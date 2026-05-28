@@ -8,6 +8,7 @@ import Papa from 'papaparse'
 import { readSheet } from 'read-excel-file/browser'
 import { LEAD_PHONE_HELP_TEXT, parseLeadPhoneForStorage } from '@/lib/phone'
 import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
+import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 
 type Employee = { id: string; name: string; email: string }
 type Lead = {
@@ -186,13 +187,14 @@ export default function AdminLeadsPage() {
     void fetchLeads()
   }, [fetchLeads])
 
-  useEffect(() => {
-    const interval = setInterval(() => {
+  useVisibilityPolling(
+    () => {
       if (pausePollRef.current) return
       void fetchLeads({ silent: true })
-    }, 30000)
-    return () => clearInterval(interval)
-  }, [fetchLeads])
+    },
+    [fetchLeads],
+    { intervalMs: 120_000 }
+  )
 
   useEffect(() => {
     const timer = setTimeout(() => {

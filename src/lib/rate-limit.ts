@@ -3,9 +3,25 @@ import type { NextRequest } from 'next/server'
 type Bucket = { count: number; resetAt: number }
 
 const buckets = new Map<string, Bucket>()
+const MAX_BUCKETS = 2000
 
 function now() {
   return Date.now()
+}
+
+function pruneBuckets() {
+  if (buckets.size < MAX_BUCKETS) return
+  const ts = now()
+  for (const [key, b] of buckets) {
+    if (b.resetAt <= ts) buckets.delete(key)
+  }
+  if (buckets.size > MAX_BUCKETS) {
+    let n = 0
+    for (const key of buckets.keys()) {
+      buckets.delete(key)
+      if (++n > 500) break
+    }
+  }
 }
 
 export function getClientIp(req: NextRequest): string {
@@ -19,6 +35,7 @@ export function checkRateLimit(opts: {
   limit: number
   windowMs: number
 }): { allowed: boolean; retryAfterSec: number } {
+  pruneBuckets()
   const ts = now()
   const current = buckets.get(opts.key)
 
@@ -41,4 +58,3 @@ export function checkRateLimit(opts: {
     retryAfterSec: Math.max(1, Math.ceil((current.resetAt - ts) / 1000)),
   }
 }
-

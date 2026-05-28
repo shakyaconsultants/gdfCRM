@@ -5,6 +5,7 @@ import Navigation from '@/components/Navigation'
 import { Crown, Loader2, Trophy, Users, Star, Sparkles } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { format, subMonths } from 'date-fns'
+import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 
 type LeaderRow = {
   rank: number
@@ -68,9 +69,9 @@ function WorkspaceContent() {
 
   useEffect(() => {
     void load()
-    const t = setInterval(() => void load(), 60000)
-    return () => clearInterval(t)
   }, [load])
+
+  useVisibilityPolling(() => load(), [load], { intervalMs: 300_000, runOnMount: false })
 
   const starsMonthLabel = starMonth
     ? format(new Date(starMonth), 'MMMM yyyy')

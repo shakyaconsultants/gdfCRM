@@ -4,9 +4,12 @@
   "private": true,
   "scripts": {
     "db:generate": "prisma generate",
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "next dev --webpack",
+    "build": "next build --webpack",
+    "postbuild": "node scripts/prepare-standalone.mjs",
+    "start": "node server.js",
+    "start:next": "next start",
+    "start:standalone": "node .next/standalone/server.js",
     "lint": "eslint",
     "postinstall": "prisma generate"
   },

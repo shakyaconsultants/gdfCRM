@@ -14,7 +14,9 @@ export async function GET(req: NextRequest) {
       orderBy: { name: 'asc' },
     })
 
-    return NextResponse.json({ advisors })
+    const response = NextResponse.json({ advisors })
+    response.headers.set('Cache-Control', 'private, max-age=600')
+    return response
   } catch {
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }

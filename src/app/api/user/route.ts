@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     if (!user) {
       return NextResponse.json({ user: null }, { status: 401 })
     }
-    return NextResponse.json({
+    const response = NextResponse.json({
       user: {
         id: user.id,
         email: user.email,
@@ -44,6 +44,8 @@ export async function GET(req: NextRequest) {
         crmAccess: user.role === 'EMPLOYEE' ? employeeHasCrmAccess(p) : true,
       },
     })
+    response.headers.set('Cache-Control', 'private, max-age=120')
+    return response
   } catch {
     return NextResponse.json({ user: null }, { status: 401 })
   }

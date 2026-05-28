@@ -18,13 +18,12 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRestrictCopy } from '@/hooks/useRestrictCopy'
 import EmployeeIntakeFormEditor from '@/components/employee/EmployeeIntakeFormEditor'
-import {
-  hasEmployeeIntakeData,
-  parseEmployeeIntakeForm,
-  type EmployeeIntakeForm,
-} from '@/lib/employee-intake-form'
+import DispositionSelect from '@/components/employee/DispositionSelect'
+import { parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee-intake-form'
 import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 import { format, formatDistanceToNow } from 'date-fns'
+import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
+import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 
 function formatLeadUpdated(iso: string | null | undefined) {
   if (!iso) return { relative: '—', full: '' }
@@ -53,7 +52,6 @@ type Lead = {
   phone: string
   disposition: string
   remarks: string | null
-  employeeIntakeForm?: unknown
   moveToAdvisor: boolean
   assignedAdvisorId: string | null
   closedSale: boolean
@@ -69,8 +67,18 @@ export default function EmployeeCrmPanel() {
   const [leads, setLeads] = useState<Lead[]>([])
   const [advisors, setAdvisors] = useState<AdvisorOption[]>([])
   const [loading, setLoading] = useState(true)
+  const [totalLeads, setTotalLeads] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
+  const [kpiStats, setKpiStats] = useState({
+    total: 0,
+    dropped: 0,
+    verified: 0,
+    clawbacks: 0,
+    referred: 0,
+  })
   const [searchTerm, setSearchTerm] = useState('')
   const [filterDisposition, setFilterDisposition] = useState('All')
+  const lastSyncRef = useRef<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   
@@ -86,18 +94,25 @@ export default function EmployeeCrmPanel() {
   intakeModalOpenRef.current = !!expandedId
   const restrictCopy = useRestrictCopy()
 
-  const openIntakeModal = (lead: Lead) => {
-    const parsed = parseEmployeeIntakeForm(lead.employeeIntakeForm ?? null)
-    const resolvedName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim()
-    if (!parsed.fullName && resolvedName) parsed.fullName = resolvedName
-    if (!parsed.callingNumber && lead.phone) parsed.callingNumber = lead.phone
-    if (!parsed.emailAddress && lead.email) parsed.emailAddress = lead.email
-    if (parsed.whatsappSameAsCalling && !parsed.whatsappNumber && parsed.callingNumber) {
-      parsed.whatsappNumber = parsed.callingNumber
-    }
-    setFormDraft(parsed)
-    lastSavedFormJson.current = JSON.stringify(parsed)
+  const openIntakeModal = async (lead: Lead) => {
     setExpandedId(lead.id)
+    try {
+      const res = await fetch(`/api/employee/leads/${lead.id}`, { cache: 'no-store' })
+      const data = await res.json()
+      const parsed = parseEmployeeIntakeForm(data.lead?.employeeIntakeForm ?? null)
+      const resolvedName = [lead.firstName, lead.lastName].filter(Boolean).join(' ').trim()
+      if (!parsed.fullName && resolvedName) parsed.fullName = resolvedName
+      if (!parsed.callingNumber && lead.phone) parsed.callingNumber = lead.phone
+      if (!parsed.emailAddress && lead.email) parsed.emailAddress = lead.email
+      if (parsed.whatsappSameAsCalling && !parsed.whatsappNumber && parsed.callingNumber) {
+        parsed.whatsappNumber = parsed.callingNumber
+      }
+      setFormDraft(parsed)
+      lastSavedFormJson.current = JSON.stringify(parsed)
+    } catch {
+      setFormDraft(parseEmployeeIntakeForm(null))
+      lastSavedFormJson.current = JSON.stringify(parseEmployeeIntakeForm(null))
+    }
   }
 
   const persistIntake = useCallback(async (leadId: string, form: EmployeeIntakeForm) => {
@@ -115,11 +130,7 @@ export default function EmployeeCrmPanel() {
         setLeads((prev) =>
           prev.map((l) =>
             l.id === leadId
-              ? {
-                  ...l,
-                  remarks: data.lead.remarks ?? l.remarks,
-                  employeeIntakeForm: data.lead.employeeIntakeForm,
-                }
+              ? { ...l, remarks: data.lead.remarks ?? l.remarks }
               : l
           )
         )
@@ -144,31 +155,66 @@ export default function EmployeeCrmPanel() {
     if (!expandedId) setFormDraft(null)
   }, [expandedId])
 
-  const fetchData = async () => {
-    try {
-      const [leadsRes, advRes] = await Promise.all([
-        fetch('/api/employee/leads', { cache: 'no-store' }),
-        fetch('/api/employee/advisors', { cache: 'no-store' }),
-      ])
-      const leadsData = await leadsRes.json()
-      const advData = await advRes.json()
-      if (leadsData.leads) {
-        setLeads(leadsData.leads)
+  const buildLeadsQuery = useCallback(
+    (opts?: { since?: string }) => {
+      const params = new URLSearchParams()
+      if (opts?.since) {
+        params.set('since', opts.since)
+      } else {
+        params.set('page', String(currentPage))
+        params.set('pageSize', String(pageSize))
+        params.set('stats', 'true')
+        if (searchTerm) params.set('search', searchTerm)
+        if (filterDisposition !== 'All') params.set('disposition', filterDisposition)
       }
-      if (advData.advisors) setAdvisors(advData.advisors)
-    } finally {
-      setLoading(false)
-    }
-  }
+      return params.toString()
+    },
+    [currentPage, pageSize, searchTerm, filterDisposition]
+  )
+
+  const fetchLeads = useCallback(
+    async (opts?: { silent?: boolean; poll?: boolean }) => {
+      if (opts?.poll && intakeModalOpenRef.current) return
+      if (!opts?.silent && !opts?.poll) setLoading(true)
+      try {
+        const qs = buildLeadsQuery(
+          opts?.poll && lastSyncRef.current ? { since: lastSyncRef.current } : undefined
+        )
+        const [leadsRes, advRes] = await Promise.all([
+          fetch(`/api/employee/leads?${qs}`, { cache: 'no-store' }),
+          opts?.poll ? Promise.resolve(null) : fetch('/api/employee/advisors', { cache: 'no-store' }),
+        ])
+        const leadsData = await leadsRes.json()
+        if (opts?.poll && leadsData.deltas) {
+          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas))
+          if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
+          return
+        }
+        if (leadsData.leads) setLeads(leadsData.leads)
+        if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
+        if (typeof leadsData.totalPages === 'number') setTotalPages(leadsData.totalPages)
+        if (leadsData.stats) setKpiStats(leadsData.stats)
+        if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
+        if (advRes) {
+          const advData = await advRes.json()
+          if (advData.advisors) setAdvisors(advData.advisors)
+        }
+      } finally {
+        if (!opts?.silent && !opts?.poll) setLoading(false)
+      }
+    },
+    [buildLeadsQuery]
+  )
 
   useEffect(() => {
-    void fetchData()
-    const interval = setInterval(() => {
-      if (intakeModalOpenRef.current) return
-      void fetchData()
-    }, 30000)
-    return () => clearInterval(interval)
-  }, [])
+    void fetchLeads()
+  }, [fetchLeads])
+
+  useVisibilityPolling(
+    () => fetchLeads({ silent: true, poll: true }),
+    [fetchLeads],
+    { intervalMs: 120_000 }
+  )
 
   // Debounce search term update
   useEffect(() => {
@@ -179,34 +225,9 @@ export default function EmployeeCrmPanel() {
     return () => clearTimeout(timer)
   }, [displaySearchTerm])
 
-  const filteredLeads = useMemo(() => {
-    return leads.filter(lead => {
-      const nameMatch = (lead.firstName || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
-                       (lead.lastName || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                       (lead.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-                       lead.phone.includes(searchTerm)
-      const dispositionMatch = filterDisposition === 'All' || lead.disposition === filterDisposition
-      return nameMatch && dispositionMatch
-    })
-  }, [leads, searchTerm, filterDisposition])
-
-  const paginatedLeads = useMemo(() => {
-    const start = (currentPage - 1) * pageSize
-    return filteredLeads.slice(start, start + pageSize)
-  }, [filteredLeads, currentPage])
-
-  const totalPages = Math.ceil(filteredLeads.length / pageSize)
-
-  const kpiStats = useMemo(
-    () => ({
-      total: leads.length,
-      dropped: leads.filter((l) => l.closedSale).length,
-      verified: leads.filter((l) => l.verifiedSale).length,
-      clawbacks: leads.filter((l) => l.caseStatus === 'CLAWBACK').length,
-      referred: leads.filter((l) => l.moveToAdvisor || l.assignedAdvisorId).length,
-    }),
-    [leads]
-  )
+  const paginatedLeads = leads
+  const pageStart = totalLeads === 0 ? 0 : (currentPage - 1) * pageSize + 1
+  const pageEnd = Math.min(currentPage * pageSize, totalLeads)
 
   const toLocalDatetimeInput = (iso: string | null) => {
     if (!iso) return ''
@@ -230,16 +251,33 @@ export default function EmployeeCrmPanel() {
         l.id === id ? { ...l, ...updates, updatedAt: new Date().toISOString() } : l
       )
     )
-    
+
     if (timeoutRef.current) clearTimeout(timeoutRef.current)
 
     const performSave = async () => {
       try {
-        await fetch(`/api/employee/leads/${id}`, {
+        const res = await fetch(`/api/employee/leads/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(updates)
+          body: JSON.stringify(updates),
         })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok && data.lead) {
+          setLeads((prev) =>
+            prev.map((l) =>
+              l.id === id
+                ? {
+                    ...l,
+                    ...updates,
+                    updatedAt:
+                      typeof data.lead.updatedAt === 'string'
+                        ? data.lead.updatedAt
+                        : l.updatedAt,
+                  }
+                : l
+            )
+          )
+        }
       } finally {
         setSavingId(null)
       }
@@ -262,7 +300,7 @@ export default function EmployeeCrmPanel() {
     if (!('Notification' in window)) return
     const notify = () => {
       const now = Date.now()
-      leads.forEach((lead) => {
+      paginatedLeads.forEach((lead) => {
         if (!lead.callbackAt) return
         const callbackTs = new Date(lead.callbackAt).getTime()
         const reminderAt = callbackTs - 15 * 60 * 1000
@@ -280,15 +318,13 @@ export default function EmployeeCrmPanel() {
 
     if (Notification.permission === 'default') void Notification.requestPermission()
     notify()
-    const id = setInterval(notify, 60 * 1000)
+    const id = setInterval(notify, 120 * 1000)
     return () => clearInterval(id)
-  }, [leads])
+  }, [paginatedLeads])
 
   const closeIntakeModal = () => setExpandedId(null)
 
-  const intakeHasData = (lead: Lead) =>
-    hasEmployeeIntakeData(parseEmployeeIntakeForm(lead.employeeIntakeForm ?? null)) ||
-    !!lead.remarks?.trim()
+  const intakeHasData = (lead: Lead) => !!lead.remarks?.trim()
 
   return (
     <div
@@ -396,7 +432,7 @@ export default function EmployeeCrmPanel() {
 
         <div className="flex-1 min-h-0 flex flex-col bg-neutral-900/50 border border-neutral-800 rounded-2xl backdrop-blur-sm shadow-xl overflow-hidden">
           <div className="shrink-0 px-4 py-2 border-b border-neutral-800/80 flex items-center justify-between gap-2 text-[11px] text-neutral-500">
-            <span>{filteredLeads.length} lead{filteredLeads.length === 1 ? '' : 's'} · scroll horizontally for all columns</span>
+            <span>{totalLeads} lead{totalLeads === 1 ? '' : 's'} · scroll horizontally for all columns</span>
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" aria-hidden />}
           </div>
           <div className="flex-1 min-h-0 overflow-auto overscroll-x-contain">
@@ -426,7 +462,7 @@ export default function EmployeeCrmPanel() {
                         Loading assigned leads...
                      </td>
                    </tr>
-                ) : filteredLeads.length === 0 ? (
+                ) : paginatedLeads.length === 0 ? (
                   <tr>
                     <td colSpan={13} className="p-10 text-center text-neutral-500">
                       No leads match your search or filter.
@@ -468,20 +504,17 @@ export default function EmployeeCrmPanel() {
                       </td>
                       <td className="p-3 text-neutral-300 normal-case max-w-[14rem] truncate select-text" title={lead.email || ''}>{lead.email || '—'}</td>
                       <td className="p-3 align-top">
-                        <select 
+                        <DispositionSelect
                           value={lead.disposition}
-                          onChange={(e) => {
-                            const nextDisposition = e.target.value
+                          options={DISPOSITIONS}
+                          onSelect={(nextDisposition) => {
                             const updates: Partial<Lead> = { disposition: nextDisposition }
                             if (nextDisposition !== 'Callback') {
                               updates.callbackAt = null
                             }
                             updateLead(lead.id, updates, true)
                           }}
-                          className="w-full min-w-[8.5rem] max-w-[11rem] bg-neutral-800 border border-neutral-700 rounded-md px-2 py-1.5 text-[11px] font-medium text-white focus:outline-none focus:ring-1 focus:ring-blue-500 select-text"
-                        >
-                          {DISPOSITIONS.map(d => <option key={d} value={d}>{d}</option>)}
-                        </select>
+                        />
                       </td>
                       <td className="p-3 align-top whitespace-nowrap select-text" title={updated.full}>
                         <span className="text-[11px] text-neutral-400 block">{updated.relative}</span>
@@ -558,9 +591,9 @@ export default function EmployeeCrmPanel() {
           {/* Pagination Controls */}
           <div className="shrink-0 bg-neutral-900/80 border-t border-neutral-800 px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="text-xs text-neutral-500">
-                {filteredLeads.length === 0
+                {totalLeads === 0
                   ? 'No leads'
-                  : `Showing ${Math.min(filteredLeads.length, (currentPage - 1) * pageSize + 1)}–${Math.min(filteredLeads.length, currentPage * pageSize)} of ${filteredLeads.length}`}
+                  : `Showing ${pageStart}–${pageEnd} of ${totalLeads}`}
                 {totalPages > 1 && ` · page ${currentPage} of ${totalPages}`}
               </div>
           {totalPages > 1 && (

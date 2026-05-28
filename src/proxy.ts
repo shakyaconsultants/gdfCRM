@@ -43,13 +43,15 @@ export async function proxy(request: NextRequest) {
   const isEmployeeHubPath =
     (pathname === '/employee' || pathname.startsWith('/employee/')) && !isCrmPath
 
-  const crmPayload = await verifyCookieJwt(crmSession)
-  const hubPayload = await verifyCookieJwt(token)
-  const hasCrmSession = crmPayload !== null && isCrmSessionPayload(crmPayload)
+  // Only verify cookies needed for this path (avoids 2x jwtVerify on every navigation)
+  let crmPayload: AppJwtClaims | null = null
+  let hubPayload: AppJwtClaims | null = null
 
-  // CRM — requires crm_session (or legacy hub token with crm claim)
   if (isCrmPath) {
+    crmPayload = await verifyCookieJwt(crmSession)
+    const hasCrmSession = crmPayload !== null && isCrmSessionPayload(crmPayload)
     if (hasCrmSession) return NextResponse.next()
+    hubPayload = await verifyCookieJwt(token)
     if (
       hubPayload?.role === 'EMPLOYEE' &&
       (!adminOtpConfigured || employeeHasCrmAccess(hubPayload))
@@ -59,8 +61,8 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/crm-access', request.url))
   }
 
-  // Team login page — always reachable; CRM session must not hijack this route
   if (isLoginPage) {
+    hubPayload = await verifyCookieJwt(token)
     if (hubPayload?.role) {
       return NextResponse.redirect(
         new URL(hubRedirectForRole(hubPayload.role as string), request.url)
@@ -69,7 +71,6 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // Marketing + CRM entry — no forced redirects (both products stay independent)
   if (isMarketingHome || isCrmAccessPage) {
     return NextResponse.next()
   }
@@ -78,15 +79,19 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Workspace — team token only (crm_session alone is not enough)
   if (isEmployeeHubPath) {
+    hubPayload = hubPayload ?? (await verifyCookieJwt(token))
     if (!hubPayload || hubPayload.role !== 'EMPLOYEE') {
       return NextResponse.redirect(new URL('/login', request.url))
     }
     return NextResponse.next()
   }
 
+  hubPayload = hubPayload ?? (await verifyCookieJwt(token))
+
   if (!hubPayload) {
+    crmPayload = crmPayload ?? (await verifyCookieJwt(crmSession))
+    const hasCrmSession = crmPayload !== null && isCrmSessionPayload(crmPayload)
     if (hasCrmSession) {
       return NextResponse.redirect(new URL('/employee/crm', request.url))
     }
@@ -106,5 +111,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)'],
 }

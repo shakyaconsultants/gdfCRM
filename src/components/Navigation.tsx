@@ -38,17 +38,48 @@ export default function Navigation() {
     pathname === '/employee/crm' || pathname.startsWith('/employee/crm/')
 
   useEffect(() => {
-    const load = () => {
+    const CACHE_KEY = 'gdf:user-cache'
+    const CACHE_TTL_MS = 5 * 60 * 1000
+
+    const load = (skipCache = false) => {
+      if (!skipCache && typeof sessionStorage !== 'undefined') {
+        try {
+          const raw = sessionStorage.getItem(CACHE_KEY)
+          if (raw) {
+            const { user: cached, at } = JSON.parse(raw) as {
+              user: { name: string; role: string; profileImageUrl?: string | null; crmAccess?: boolean }
+              at: number
+            }
+            if (cached && Date.now() - at < CACHE_TTL_MS) {
+              setUser(cached)
+              return
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
       fetch('/api/user')
         .then((res) => res.json())
         .then((data) => {
-          if (data.user) setUser(data.user)
+          if (data.user) {
+            setUser(data.user)
+            try {
+              sessionStorage.setItem(
+                CACHE_KEY,
+                JSON.stringify({ user: data.user, at: Date.now() })
+              )
+            } catch {
+              /* ignore */
+            }
+          }
         })
         .catch(() => {})
     }
     load()
-    window.addEventListener('gdf:user-updated', load)
-    return () => window.removeEventListener('gdf:user-updated', load)
+    const onUpdate = () => load(true)
+    window.addEventListener('gdf:user-updated', onUpdate)
+    return () => window.removeEventListener('gdf:user-updated', onUpdate)
   }, [])
 
   const logoutScope: 'hub' | 'crm' = isEmployeeCrm ? 'crm' : 'hub'

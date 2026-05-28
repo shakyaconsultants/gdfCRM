@@ -55,25 +55,11 @@ export default function AdminDashboard() {
     setLoading(true)
     try {
       const qs = dateFrom && dateTo ? `?from=${dateFrom}&to=${dateTo}` : ''
-      const [mRes, advRes, caRes] = await Promise.all([
-        fetch(`/api/admin/metrics${qs}`),
-        fetch(`/api/admin/advisors/dashboard${qs}`),
-        fetch(`/api/admin/case-assessors/dashboard${qs}`),
-      ])
-      const data = await mRes.json()
-      setMetrics(data)
-      if (advRes.ok) {
-        const adv = await advRes.json()
-        setAdvisorPerformance(adv.perAdvisor ?? [])
-      } else {
-        setAdvisorPerformance([])
-      }
-      if (caRes.ok) {
-        const ca = await caRes.json()
-        setAssessorPerformance(ca.perAssessor ?? [])
-      } else {
-        setAssessorPerformance([])
-      }
+      const res = await fetch(`/api/admin/dashboard${qs}`)
+      const data = await res.json()
+      if (data.metrics) setMetrics(data.metrics)
+      setAdvisorPerformance(data.advisors?.perAdvisor ?? [])
+      setAssessorPerformance(data.assessors?.perAssessor ?? [])
     } finally {
       setLoading(false)
     }
