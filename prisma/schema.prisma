@@ -25,6 +25,8 @@ model User {
   attendanceEntries AttendanceEntry[]
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([role])
 }
 
 /// Stores a pending login after password check; OTP is verified in a second step.

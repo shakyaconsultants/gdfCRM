@@ -57,13 +57,19 @@ async function attachAssigneeNames(rows: LeadListRow[]) {
   }
   const nameById = new Map<string, string>()
   if (userIds.size > 0) {
+    const userQueryStart = Date.now()
     const users = await db.user.findMany({
       where: { id: { in: [...userIds] } },
       select: { id: true, name: true },
     })
+    logQueryTiming(LOG_SCOPE, 'attach names user query', Date.now() - userQueryStart, {
+      ids: userIds.size,
+      rows: users.length,
+    })
     for (const u of users) nameById.set(u.id, u.name)
   }
-  return rows.map(({ assignedToId, assignedAdvisorId, ...rest }) => ({
+  const mapStart = Date.now()
+  const result = rows.map(({ assignedToId, assignedAdvisorId, ...rest }) => ({
     ...rest,
     assignedTo:
       assignedToId && nameById.has(assignedToId)
@@ -74,6 +80,8 @@ async function attachAssigneeNames(rows: LeadListRow[]) {
         ? { name: nameById.get(assignedAdvisorId)! }
         : null,
   }))
+  logQueryTiming(LOG_SCOPE, 'attach names map', Date.now() - mapStart, { leads: rows.length })
+  return result
 }
 
 export const runtime = 'nodejs'

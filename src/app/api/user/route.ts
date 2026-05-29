@@ -5,10 +5,13 @@ import { db } from '@/lib/db'
 import { employeeHasCrmAccess, type AppJwtClaims } from '@/lib/employee-jwt'
 import { CRM_SESSION_COOKIE } from '@/lib/employee-crm-session'
 import { getJwtSecret } from '@/lib/jwt-secret'
+import { logQueryTiming } from '@/lib/query-timing-log'
 
 const secret = getJwtSecret()
+const LOG_SCOPE = 'USER API'
 
 export async function GET(req: NextRequest) {
+  const totalStart = Date.now()
   const crmJwt = req.cookies.get(CRM_SESSION_COOKIE)?.value
   const token = req.cookies.get('token')?.value
   /** Prefer team token on workspace; CRM cookie when team session is absent. */
@@ -19,8 +22,12 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    const jwtStart = Date.now()
     const { payload } = await jwtVerify(jwt, secret)
+    logQueryTiming(LOG_SCOPE, 'jwt verify', Date.now() - jwtStart)
+
     const p = payload as AppJwtClaims
+    const prismaStart = Date.now()
     const user = await db.user.findUnique({
       where: { id: payload.id as string },
       select: {
@@ -31,7 +38,12 @@ export async function GET(req: NextRequest) {
         profileImageUrl: true,
       },
     })
+    logQueryTiming(LOG_SCOPE, 'prisma query', Date.now() - prismaStart, {
+      userId: String(payload.id ?? '').slice(0, 8),
+    })
+
     if (!user) {
+      logQueryTiming(LOG_SCOPE, 'total', Date.now() - totalStart, { status: 401 })
       return NextResponse.json({ user: null }, { status: 401 })
     }
     const response = NextResponse.json({
@@ -45,8 +57,10 @@ export async function GET(req: NextRequest) {
       },
     })
     response.headers.set('Cache-Control', 'private, max-age=120')
+    logQueryTiming(LOG_SCOPE, 'total', Date.now() - totalStart, { status: 200 })
     return response
   } catch {
+    logQueryTiming(LOG_SCOPE, 'total', Date.now() - totalStart, { status: 401, error: true })
     return NextResponse.json({ user: null }, { status: 401 })
   }
 }
