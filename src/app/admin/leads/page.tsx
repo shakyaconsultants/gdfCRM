@@ -9,6 +9,7 @@ import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { LeadSaveQueue } from '@/lib/lead-save-queue'
 import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
+import { MIN_LEAD_SEARCH_LENGTH } from '@/lib/lead-search-filter'
 import AdminLeadTableRow, { type AdminLeadRow } from '@/components/admin/AdminLeadTableRow'
 
 type Employee = { id: string; name: string; email: string }
@@ -288,7 +289,8 @@ export default function AdminLeadsPage() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setTotalLeads(null)
-      setSearchTerm(displaySearchTerm)
+      const q = displaySearchTerm.trim()
+      setSearchTerm(q.length === 0 || q.length >= MIN_LEAD_SEARCH_LENGTH ? q : '')
       setCurrentPage(1)
       deselectAll()
     }, 500)
@@ -644,11 +646,18 @@ export default function AdminLeadsPage() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-500" />
                 <input 
                   type="text" 
-                  placeholder="FIND NAME OR PHONE..."
+                  placeholder={`FIND NAME OR PHONE (${MIN_LEAD_SEARCH_LENGTH}+ CHARS)...`}
                   value={displaySearchTerm}
                   onChange={e => setDisplaySearchTerm(e.target.value)}
                   className="w-full bg-neutral-900 border border-neutral-800 rounded-lg pl-10 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-white uppercase"
                 />
+                {displaySearchTerm.trim().length > 0 &&
+                  displaySearchTerm.trim().length < MIN_LEAD_SEARCH_LENGTH && (
+                    <p className="text-[10px] text-amber-500/90 mt-1 normal-case">
+                      Type at least {MIN_LEAD_SEARCH_LENGTH} characters to search{' '}
+                      {totalLeads != null ? `(${totalLeads.toLocaleString()} leads)` : ''}
+                    </p>
+                  )}
               </div>
 
               <div className="relative w-full sm:w-48">

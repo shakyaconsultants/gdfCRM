@@ -25,6 +25,7 @@ import { format, formatDistanceToNow } from 'date-fns'
 import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 import { LeadSaveQueue } from '@/lib/lead-save-queue'
+import { MIN_LEAD_SEARCH_LENGTH } from '@/lib/lead-search-filter'
 
 function formatLeadUpdated(iso: string | null | undefined) {
   if (!iso) return { relative: '—', full: '' }
@@ -221,8 +222,9 @@ export default function EmployeeCrmPanel() {
   // Debounce search term update
   useEffect(() => {
     const timer = setTimeout(() => {
-      setSearchTerm(displaySearchTerm)
-      setCurrentPage(1) // Reset to first page on search
+      const q = displaySearchTerm.trim()
+      setSearchTerm(q.length === 0 || q.length >= MIN_LEAD_SEARCH_LENGTH ? q : '')
+      setCurrentPage(1)
     }, 300)
     return () => clearTimeout(timer)
   }, [displaySearchTerm])

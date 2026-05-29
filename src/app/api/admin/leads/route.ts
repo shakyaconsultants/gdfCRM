@@ -13,7 +13,11 @@ import {
   invalidateCountCache,
   setCachedCount,
 } from '@/lib/admin-leads-count-cache'
+import { invalidateAdminDashboardCache } from '@/lib/admin-dashboard-cache'
+import { leadSearchFilter, normalizeLeadSearch } from '@/lib/lead-search-filter'
+import { logQueryTiming, timed } from '@/lib/query-timing-log'
 
+const LOG_SCOPE = 'ADMIN LEADS'
 const secret = getJwtSecret()
 
 /** Flat lead row — assignee names attached in a second batched query (faster than Prisma joins). */
@@ -111,17 +115,8 @@ function buildAdminLeadWhere(opts: {
     and.push({ id: { in: opts.ids } })
   }
 
-  const search = opts.search?.trim()
-  if (search) {
-    and.push({
-      OR: [
-        { firstName: { contains: search } },
-        { lastName: { contains: search } },
-        { email: { contains: search } },
-        { phone: { contains: search } },
-      ],
-    })
-  }
+  const searchFilter = leadSearchFilter(opts.search ?? '')
+  if (searchFilter) and.push(searchFilter)
 
   return and.length ? { AND: and } : {}
 }
@@ -129,6 +124,8 @@ function buildAdminLeadWhere(opts: {
 export async function GET(req: NextRequest) {
   const token = req.cookies.get('token')?.value
   if (!token) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const reqStart = Date.now()
 
   try {
     const { payload } = await jwtVerify(token, secret)
@@ -143,10 +140,12 @@ export async function GET(req: NextRequest) {
       ? parsePositiveInt(searchParams.get('pageSize'), ADMIN_LEADS_PAGE_SIZE, 5000)
       : ADMIN_LEADS_PAGE_SIZE
 
-    const search = searchParams.get('search')?.trim() ?? ''
+    const search = normalizeLeadSearch(searchParams.get('search'))
     const disposition = searchParams.get('disposition') ?? 'All'
     const unassignedOnly = searchParams.get('unassignedOnly') === 'true'
     const ids = uniqStrings(searchParams.get('ids')?.split(',') ?? [])
+
+    const mode = countOnly ? 'countOnly' : idsOnly ? 'idsOnly' : 'list'
 
     const where = buildAdminLeadWhere({
       search,
@@ -163,11 +162,26 @@ export async function GET(req: NextRequest) {
     })
 
     if (countOnly) {
-      let total = getCachedCount(cacheKey)
-      if (total == null) {
-        total = await db.lead.count({ where })
-        setCachedCount(cacheKey, total)
+      const cached = getCachedCount(cacheKey)
+      if (cached != null) {
+        logQueryTiming(LOG_SCOPE, 'count (cache hit)', Date.now() - reqStart, {
+          mode,
+          page,
+        })
+        const response = NextResponse.json({
+          total: cached,
+          totalPages: Math.max(1, Math.ceil(cached / ADMIN_LEADS_PAGE_SIZE)),
+        })
+        response.headers.set('Cache-Control', 'private, no-store')
+        return response
       }
+
+      const total = await timed(LOG_SCOPE, 'count', () => db.lead.count({ where }), {
+        mode,
+        page,
+      })
+      setCachedCount(cacheKey, total)
+      logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, { mode, page })
       const response = NextResponse.json({
         total,
         totalPages: Math.max(1, Math.ceil(total / ADMIN_LEADS_PAGE_SIZE)),
@@ -180,18 +194,25 @@ export async function GET(req: NextRequest) {
     const take = pageSize
 
     if (idsOnly) {
-      const rowsPromise = db.lead.findMany({
-        where,
-        select: { id: true },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take,
-      })
       const skipIdsTotal =
         searchParams.get('skipTotal') === 'true' ||
         searchParams.get('includeTotal') === 'false'
+
       if (skipIdsTotal) {
-        const rows = await rowsPromise
+        const rows = await timed(
+          LOG_SCOPE,
+          'findMany idsOnly',
+          () =>
+            db.lead.findMany({
+              where,
+              select: { id: true },
+              orderBy: { createdAt: 'desc' },
+              skip,
+              take,
+            }),
+          { mode, page, take }
+        )
+        logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, { mode, page, take })
         const response = NextResponse.json({
           ids: rows.map((r) => r.id),
           page,
@@ -200,8 +221,25 @@ export async function GET(req: NextRequest) {
         response.headers.set('Cache-Control', 'private, no-store')
         return response
       }
+
+      const countStart = Date.now()
+      const rowsPromise = db.lead.findMany({
+        where,
+        select: { id: true },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+      })
       const [total, rows] = await Promise.all([db.lead.count({ where }), rowsPromise])
+      logQueryTiming(LOG_SCOPE, 'count', Date.now() - countStart, { mode, page, take })
+      logQueryTiming(LOG_SCOPE, 'findMany idsOnly', Date.now() - countStart, {
+        mode,
+        page,
+        take,
+        parallel: true,
+      })
       setCachedCount(cacheKey, total)
+      logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, { mode, page, take })
       const response = NextResponse.json({
         ids: rows.map((r) => r.id),
         total,
@@ -213,15 +251,28 @@ export async function GET(req: NextRequest) {
       return response
     }
 
-    const rawRows = await db.lead.findMany({
-      where,
-      select: ADMIN_LEAD_LIST_SELECT,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: ADMIN_LEADS_PAGE_SIZE + 1,
-    })
+    const rawRows = await timed(
+      LOG_SCOPE,
+      'findMany',
+      () =>
+        db.lead.findMany({
+          where,
+          select: ADMIN_LEAD_LIST_SELECT,
+          orderBy: { createdAt: 'desc' },
+          skip,
+          take: ADMIN_LEADS_PAGE_SIZE + 1,
+        }),
+      { mode, page }
+    )
     const hasMore = rawRows.length > ADMIN_LEADS_PAGE_SIZE
-    const leads = await attachAssigneeNames(rawRows.slice(0, ADMIN_LEADS_PAGE_SIZE))
+    const leads = await timed(
+      LOG_SCOPE,
+      'attach names',
+      () => attachAssigneeNames(rawRows.slice(0, ADMIN_LEADS_PAGE_SIZE)),
+      { mode, page, rows: Math.min(rawRows.length, ADMIN_LEADS_PAGE_SIZE) }
+    )
+
+    logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, { mode, page })
 
     const response = NextResponse.json({
       leads,
@@ -325,6 +376,7 @@ export async function POST(req: NextRequest) {
       await db.lead.createMany({ data: newLeadsToInsert })
       createdCount = newLeadsToInsert.length
       invalidateCountCache()
+      invalidateAdminDashboardCache()
     }
 
     return NextResponse.json({ success: true, createdCount, skippedCount })
@@ -372,6 +424,9 @@ export async function PUT(req: NextRequest) {
       data: employeeAssignUpdate(employee.id),
     })
 
+    invalidateCountCache()
+    invalidateAdminDashboardCache()
+
     return NextResponse.json({
       success: true,
       updatedCount: updated.count,
@@ -400,7 +455,10 @@ export async function DELETE(req: NextRequest) {
     const deleted = await db.lead.deleteMany({
       where: { id: { in: normalizedLeadIds } },
     })
-    if (deleted.count > 0) invalidateCountCache()
+    if (deleted.count > 0) {
+      invalidateCountCache()
+      invalidateAdminDashboardCache()
+    }
 
     return NextResponse.json({ success: true, deletedCount: deleted.count })
   } catch {

@@ -108,9 +108,12 @@ model Lead {
   updatedAt        DateTime  @updatedAt
   documents        LeadDocument[]
 
-  @@index([createdAt])
-  @@index([assignedToId])
-  @@index([disposition])
+  @@index([createdAt(sort: Desc)])
+  @@index([assignedToId, createdAt(sort: Desc)])
+  @@index([assignedAdvisorId, createdAt(sort: Desc)])
+  @@index([assignedCaseAssessorId, createdAt(sort: Desc)])
+  @@index([disposition, createdAt(sort: Desc)])
+  @@index([updatedAt(sort: Desc)])
 }
 
 model LeadDocument {

@@ -28,6 +28,7 @@ import { parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee
 import EmployeeIntakeFormEditor from '@/components/employee/EmployeeIntakeFormEditor'
 import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 import { LeadSaveQueue } from '@/lib/lead-save-queue'
+import { MIN_LEAD_SEARCH_LENGTH } from '@/lib/lead-search-filter'
 
 type CaseAssessorOption = { id: string; name: string }
 
@@ -184,7 +185,8 @@ export default function AdminAdvisorPage() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setSearchTerm(displaySearchTerm)
+      const q = displaySearchTerm.trim()
+      setSearchTerm(q.length === 0 || q.length >= MIN_LEAD_SEARCH_LENGTH ? q : '')
       setCurrentPage(1)
     }, 300)
     return () => clearTimeout(timer)
