@@ -1,5 +1,5 @@
 /** In-memory admin dashboard response cache (single cPanel Node instance). */
-const TTL_MS = 30_000
+const TTL_MS = 5 * 60 * 1000
 
 type Entry = { data: unknown; ts: number }
 
@@ -15,7 +15,7 @@ export function getAdminDashboardCache(key: string): unknown | null {
     console.log('CACHE MISS', key)
     return null
   }
-  console.log('CACHE HIT', key)
+  console.log('CACHE HIT', key, `(memory age ${Date.now() - hit.ts}ms)`)
   return hit.data
 }
 
@@ -29,4 +29,5 @@ export function setAdminDashboardCache(key: string, data: unknown) {
 
 export function invalidateAdminDashboardCache() {
   store.clear()
+  console.log('[ADMIN DASHBOARD] memory cache cleared')
 }

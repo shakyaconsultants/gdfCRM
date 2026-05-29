@@ -129,3 +129,12 @@ model LeadDocument {
   mimeType     String?
   createdAt    DateTime @default(now())
 }
+
+/// Precomputed admin dashboard payload — one row per date scope (`all` or `YYYY-MM-DD__YYYY-MM-DD`).
+model DashboardStats {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  scopeKey  String   @unique
+  payload   Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

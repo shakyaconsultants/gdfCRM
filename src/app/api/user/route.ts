@@ -10,6 +10,8 @@ import { logQueryTiming } from '@/lib/query-timing-log'
 const secret = getJwtSecret()
 const LOG_SCOPE = 'USER API'
 
+export const preferredRegion = 'bom1'
+
 export async function GET(req: NextRequest) {
   const totalStart = Date.now()
   const crmJwt = req.cookies.get(CRM_SESSION_COOKIE)?.value

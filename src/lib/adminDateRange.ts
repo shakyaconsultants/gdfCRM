@@ -19,3 +19,20 @@ export function getLeadUpdatedAtRange(
 export function getLeadUpdatedAtRangeFromRequest(req: NextRequest) {
   return getLeadUpdatedAtRange(new URL(req.url).searchParams)
 }
+
+/** Stable cache keys from raw query params — do not re-encode dates via toISOString(). */
+export function getDashboardRequestContext(req: NextRequest) {
+  const searchParams = new URL(req.url).searchParams
+  const fromParam = searchParams.get('from')
+  const toParam = searchParams.get('to')
+  const range = getLeadUpdatedAtRange(searchParams)
+  const hasRange = range != null && !!fromParam && !!toParam
+
+  return {
+    range,
+    fromKey: hasRange ? fromParam! : null,
+    toKey: hasRange ? toParam! : null,
+    scopeKey: hasRange ? `${fromParam}__${toParam}` : 'all',
+    cacheKey: hasRange ? `dash:${fromParam}:${toParam}` : 'dash:all:all',
+  }
+}

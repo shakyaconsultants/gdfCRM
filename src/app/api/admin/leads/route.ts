@@ -14,11 +14,14 @@ import {
   setCachedCount,
 } from '@/lib/admin-leads-count-cache'
 import { invalidateAdminDashboardCache } from '@/lib/admin-dashboard-cache'
+import { refreshDashboardStatsAfterLeadMutation } from '@/lib/dashboard-stats-snapshot'
 import { leadSearchFilter, normalizeLeadSearch } from '@/lib/lead-search-filter'
 import { logQueryTiming, timed } from '@/lib/query-timing-log'
 
 const LOG_SCOPE = 'ADMIN LEADS'
 const secret = getJwtSecret()
+
+export const preferredRegion = 'bom1'
 
 /** Flat lead row — assignee names attached in a second batched query (faster than Prisma joins). */
 const ADMIN_LEAD_LIST_SELECT = {
@@ -385,6 +388,7 @@ export async function POST(req: NextRequest) {
       createdCount = newLeadsToInsert.length
       invalidateCountCache()
       invalidateAdminDashboardCache()
+      void refreshDashboardStatsAfterLeadMutation()
     }
 
     return NextResponse.json({ success: true, createdCount, skippedCount })
@@ -434,6 +438,7 @@ export async function PUT(req: NextRequest) {
 
     invalidateCountCache()
     invalidateAdminDashboardCache()
+    void refreshDashboardStatsAfterLeadMutation()
 
     return NextResponse.json({
       success: true,
@@ -466,6 +471,7 @@ export async function DELETE(req: NextRequest) {
     if (deleted.count > 0) {
       invalidateCountCache()
       invalidateAdminDashboardCache()
+      void refreshDashboardStatsAfterLeadMutation()
     }
 
     return NextResponse.json({ success: true, deletedCount: deleted.count })
