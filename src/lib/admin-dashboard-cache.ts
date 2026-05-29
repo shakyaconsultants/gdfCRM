@@ -11,7 +11,11 @@ export function adminDashboardCacheKey(from: string | null, to: string | null): 
 
 export function getAdminDashboardCache(key: string): unknown | null {
   const hit = store.get(key)
-  if (!hit || Date.now() - hit.ts > TTL_MS) return null
+  if (!hit || Date.now() - hit.ts > TTL_MS) {
+    console.log('CACHE MISS', key)
+    return null
+  }
+  console.log('CACHE HIT', key)
   return hit.data
 }
 

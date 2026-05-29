@@ -47,10 +47,11 @@ export async function GET(req: NextRequest) {
     }
 
     const u = range ? { updatedAt: { gte: range.gte, lte: range.lte } } : {}
+    const logMeta = { from: fromKey ?? 'all', to: toKey ?? 'all' }
 
-    const [advisors, assessors, metricsBundle] = await timed(
+    const [advisors, assessors] = await timed(
       LOG_SCOPE,
-      'metrics bundle',
+      'load advisors/assessors',
       () =>
         Promise.all([
           db.user.findMany({
@@ -63,31 +64,8 @@ export async function GET(req: NextRequest) {
             select: { id: true, name: true, email: true },
             orderBy: { name: 'asc' },
           }),
-          Promise.all([
-            db.lead.count({ where: u }),
-            db.lead.count({ where: { moveToAdvisor: true, ...u } }),
-            db.lead.count({ where: { closedSale: true, ...u } }),
-            db.lead.count({ where: { verifiedSale: true, ...u } }),
-            db.lead.count({ where: { caseStatus: 'CLAWBACK', ...u } }),
-            db.lead.count({ where: { paymentReceived: true, ...u } }),
-            db.lead.count({ where: { disposition: { not: 'New' }, ...u } }),
-            db.lead.findMany({
-              where: { disposition: { not: 'New' }, ...u },
-              take: 5,
-              orderBy: { updatedAt: 'desc' },
-              select: {
-                id: true,
-                firstName: true,
-                lastName: true,
-                disposition: true,
-                updatedAt: true,
-                assignedTo: { select: { name: true } },
-              },
-            }),
-            buildEmployeeLeaderboard(db, u),
-          ]),
         ]),
-      { from: fromKey ?? 'all', to: toKey ?? 'all' }
+      logMeta
     )
 
     const [
@@ -99,19 +77,61 @@ export async function GET(req: NextRequest) {
       paymentCount,
       totalCalls,
       recentActivity,
-      leaderboard,
-    ] = metricsBundle
-
-    const [perAdvisor, perAssessor, totalAssignedLeads] = await timed(
+    ] = await timed(
       LOG_SCOPE,
-      'advisor/assessor stats',
+      'kpi counts + recent activity',
       () =>
         Promise.all([
-          buildAdvisorPerformance(db, advisors, u),
-          buildAssessorPerformance(db, assessors, u),
-          db.lead.count({ where: { assignedCaseAssessorId: { not: null }, ...u } }),
+          db.lead.count({ where: u }),
+          db.lead.count({ where: { moveToAdvisor: true, ...u } }),
+          db.lead.count({ where: { closedSale: true, ...u } }),
+          db.lead.count({ where: { verifiedSale: true, ...u } }),
+          db.lead.count({ where: { caseStatus: 'CLAWBACK', ...u } }),
+          db.lead.count({ where: { paymentReceived: true, ...u } }),
+          db.lead.count({ where: { disposition: { not: 'New' }, ...u } }),
+          db.lead.findMany({
+            where: { disposition: { not: 'New' }, ...u },
+            take: 5,
+            orderBy: { updatedAt: 'desc' },
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              disposition: true,
+              updatedAt: true,
+              assignedTo: { select: { name: true } },
+            },
+          }),
         ]),
-      { from: fromKey ?? 'all', to: toKey ?? 'all' }
+      logMeta
+    )
+
+    const leaderboard = await timed(
+      LOG_SCOPE,
+      'leaderboard',
+      () => buildEmployeeLeaderboard(db, u),
+      logMeta
+    )
+
+    const perAdvisor = await timed(
+      LOG_SCOPE,
+      'advisor performance',
+      () => buildAdvisorPerformance(db, advisors, u),
+      logMeta
+    )
+
+    const perAssessor = await timed(
+      LOG_SCOPE,
+      'assessor performance',
+      () => buildAssessorPerformance(db, assessors, u),
+      logMeta
+    )
+
+    const totalAssignedLeads = await timed(
+      LOG_SCOPE,
+      'assessor assigned count',
+      () => db.lead.count({ where: { assignedCaseAssessorId: { not: null }, ...u } }),
+      logMeta
     )
 
     const dashboardPayload = {
@@ -152,10 +172,7 @@ export async function GET(req: NextRequest) {
     }
 
     setAdminDashboardCache(cacheKey, dashboardPayload)
-    logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, {
-      from: fromKey ?? 'all',
-      to: toKey ?? 'all',
-    })
+    logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, logMeta)
 
     const response = NextResponse.json(dashboardPayload)
     response.headers.set('Cache-Control', 'private, max-age=30')

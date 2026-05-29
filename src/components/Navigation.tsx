@@ -125,6 +125,7 @@ export default function Navigation() {
                     <Link
                       key={item.href}
                       href={item.href}
+                      prefetch={false}
                       className={`px-2.5 py-1.5 rounded-md text-sm transition-colors whitespace-nowrap ${
                         active
                           ? 'bg-neutral-800 text-white font-medium'
@@ -236,6 +237,7 @@ export default function Navigation() {
                   <Link
                     key={item.href}
                     href={item.href}
+                    prefetch={false}
                     onClick={() => setMobileOpen(false)}
                     className={`block px-3 py-2.5 text-sm font-medium rounded-md ${
                       active ? 'bg-neutral-800 text-white' : 'text-neutral-300 hover:text-white hover:bg-neutral-800/80'
