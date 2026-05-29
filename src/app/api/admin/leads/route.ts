@@ -7,10 +7,16 @@ import { parseLeadPhoneForStorage } from '@/lib/phone'
 import { employeeAssignUpdate } from '@/lib/lead-assignment'
 import { getJwtSecret } from '@/lib/jwt-secret'
 import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
+import {
+  countCacheKey,
+  getCachedCount,
+  invalidateCountCache,
+  setCachedCount,
+} from '@/lib/admin-leads-count-cache'
 
 const secret = getJwtSecret()
 
-/** Minimal fields for table — remarks/address loaded on row expand. */
+/** Flat lead row — assignee names attached in a second batched query (faster than Prisma joins). */
 const ADMIN_LEAD_LIST_SELECT = {
   id: true,
   title: true,
@@ -21,9 +27,50 @@ const ADMIN_LEAD_LIST_SELECT = {
   disposition: true,
   verifiedSale: true,
   paymentReceived: true,
-  assignedTo: { select: { name: true } },
-  assignedAdvisor: { select: { name: true } },
+  assignedToId: true,
+  assignedAdvisorId: true,
 } as const
+
+type LeadListRow = {
+  id: string
+  title: string | null
+  firstName: string | null
+  lastName: string | null
+  email: string | null
+  phone: string
+  disposition: string
+  verifiedSale: boolean
+  paymentReceived: boolean
+  assignedToId: string | null
+  assignedAdvisorId: string | null
+}
+
+async function attachAssigneeNames(rows: LeadListRow[]) {
+  const userIds = new Set<string>()
+  for (const row of rows) {
+    if (row.assignedToId) userIds.add(row.assignedToId)
+    if (row.assignedAdvisorId) userIds.add(row.assignedAdvisorId)
+  }
+  const nameById = new Map<string, string>()
+  if (userIds.size > 0) {
+    const users = await db.user.findMany({
+      where: { id: { in: [...userIds] } },
+      select: { id: true, name: true },
+    })
+    for (const u of users) nameById.set(u.id, u.name)
+  }
+  return rows.map(({ assignedToId, assignedAdvisorId, ...rest }) => ({
+    ...rest,
+    assignedTo:
+      assignedToId && nameById.has(assignedToId)
+        ? { name: nameById.get(assignedToId)! }
+        : null,
+    assignedAdvisor:
+      assignedAdvisorId && nameById.has(assignedAdvisorId)
+        ? { name: nameById.get(assignedAdvisorId)! }
+        : null,
+  }))
+}
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -90,9 +137,7 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
     const page = parsePositiveInt(searchParams.get('page'), 1)
     const idsOnly = searchParams.get('idsOnly') === 'true'
-    const skipTotal =
-      searchParams.get('skipTotal') === 'true' ||
-      searchParams.get('includeTotal') === 'false'
+    const countOnly = searchParams.get('countOnly') === 'true'
 
     const pageSize = idsOnly
       ? parsePositiveInt(searchParams.get('pageSize'), ADMIN_LEADS_PAGE_SIZE, 5000)
@@ -110,6 +155,27 @@ export async function GET(req: NextRequest) {
       ids: ids.length ? ids : undefined,
     })
 
+    const cacheKey = countCacheKey({
+      search,
+      disposition,
+      unassignedOnly,
+      idsKey: ids.join(','),
+    })
+
+    if (countOnly) {
+      let total = getCachedCount(cacheKey)
+      if (total == null) {
+        total = await db.lead.count({ where })
+        setCachedCount(cacheKey, total)
+      }
+      const response = NextResponse.json({
+        total,
+        totalPages: Math.max(1, Math.ceil(total / ADMIN_LEADS_PAGE_SIZE)),
+      })
+      response.headers.set('Cache-Control', 'private, no-store')
+      return response
+    }
+
     const skip = (page - 1) * pageSize
     const take = pageSize
 
@@ -121,7 +187,10 @@ export async function GET(req: NextRequest) {
         skip,
         take,
       })
-      if (skipTotal) {
+      const skipIdsTotal =
+        searchParams.get('skipTotal') === 'true' ||
+        searchParams.get('includeTotal') === 'false'
+      if (skipIdsTotal) {
         const rows = await rowsPromise
         const response = NextResponse.json({
           ids: rows.map((r) => r.id),
@@ -132,6 +201,7 @@ export async function GET(req: NextRequest) {
         return response
       }
       const [total, rows] = await Promise.all([db.lead.count({ where }), rowsPromise])
+      setCachedCount(cacheKey, total)
       const response = NextResponse.json({
         ids: rows.map((r) => r.id),
         total,
@@ -143,35 +213,21 @@ export async function GET(req: NextRequest) {
       return response
     }
 
-    const leadsPromise = db.lead.findMany({
+    const rawRows = await db.lead.findMany({
       where,
       select: ADMIN_LEAD_LIST_SELECT,
       orderBy: { createdAt: 'desc' },
       skip,
-      take,
+      take: ADMIN_LEADS_PAGE_SIZE + 1,
     })
-
-    if (skipTotal) {
-      const leads = await leadsPromise
-      const response = NextResponse.json({
-        leads,
-        page,
-        pageSize,
-        pageSizeFixed: ADMIN_LEADS_PAGE_SIZE,
-      })
-      response.headers.set('Cache-Control', 'private, no-store')
-      return response
-    }
-
-    const [total, leads] = await Promise.all([db.lead.count({ where }), leadsPromise])
+    const hasMore = rawRows.length > ADMIN_LEADS_PAGE_SIZE
+    const leads = await attachAssigneeNames(rawRows.slice(0, ADMIN_LEADS_PAGE_SIZE))
 
     const response = NextResponse.json({
       leads,
-      total,
       page,
-      pageSize,
-      pageSizeFixed: ADMIN_LEADS_PAGE_SIZE,
-      totalPages: Math.max(1, Math.ceil(total / ADMIN_LEADS_PAGE_SIZE)),
+      pageSize: ADMIN_LEADS_PAGE_SIZE,
+      hasMore,
     })
     response.headers.set('Cache-Control', 'private, no-store')
     return response
@@ -268,6 +324,7 @@ export async function POST(req: NextRequest) {
     if (newLeadsToInsert.length > 0) {
       await db.lead.createMany({ data: newLeadsToInsert })
       createdCount = newLeadsToInsert.length
+      invalidateCountCache()
     }
 
     return NextResponse.json({ success: true, createdCount, skippedCount })
@@ -343,6 +400,7 @@ export async function DELETE(req: NextRequest) {
     const deleted = await db.lead.deleteMany({
       where: { id: { in: normalizedLeadIds } },
     })
+    if (deleted.count > 0) invalidateCountCache()
 
     return NextResponse.json({ success: true, deletedCount: deleted.count })
   } catch {
