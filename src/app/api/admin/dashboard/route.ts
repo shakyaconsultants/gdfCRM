@@ -108,21 +108,21 @@ export async function GET(req: NextRequest) {
 
     const leaderboard = await timed(
       LOG_SCOPE,
-      'leaderboard',
+      'buildEmployeeLeaderboard',
       () => buildEmployeeLeaderboard(db, u),
       logMeta
     )
 
     const perAdvisor = await timed(
       LOG_SCOPE,
-      'advisor performance',
+      'buildAdvisorPerformance',
       () => buildAdvisorPerformance(db, advisors, u),
       logMeta
     )
 
     const perAssessor = await timed(
       LOG_SCOPE,
-      'assessor performance',
+      'buildAssessorPerformance',
       () => buildAssessorPerformance(db, assessors, u),
       logMeta
     )

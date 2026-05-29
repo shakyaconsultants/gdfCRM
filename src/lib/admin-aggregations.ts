@@ -1,5 +1,8 @@
 import type { Prisma } from '@prisma/client'
 import type { PrismaClient } from '@prisma/client'
+import { logQueryTiming } from '@/lib/query-timing-log'
+
+const PROFILE_SCOPE = 'DASHBOARD PROFILE'
 
 type CountByAssignee = { assigneeId: string; count: number }[]
 
@@ -38,6 +41,7 @@ export async function buildEmployeeLeaderboard(
   db: PrismaClient,
   leadWhere: Prisma.LeadWhereInput
 ) {
+  const start = Date.now()
   const employees = await db.user.findMany({
     where: { role: 'EMPLOYEE' },
     select: { id: true, name: true },
@@ -71,7 +75,7 @@ export async function buildEmployeeLeaderboard(
   const verified = countMap(mapGroupByAssignedTo(verifiedRows))
   const clawback = countMap(mapGroupByAssignedTo(clawbackRows))
 
-  return employees
+  const result = employees
     .map((emp) => ({
       name: emp.name,
       droppedCount: dropped.get(emp.id) ?? 0,
@@ -84,6 +88,10 @@ export async function buildEmployeeLeaderboard(
         b.droppedCount - a.droppedCount ||
         b.clawbackCount - a.clawbackCount
     )
+  logQueryTiming(PROFILE_SCOPE, 'buildEmployeeLeaderboard', Date.now() - start, {
+    employees: employees.length,
+  })
+  return result
 }
 
 export async function buildAdvisorPerformance(
@@ -91,6 +99,7 @@ export async function buildAdvisorPerformance(
   advisors: { id: string; name: string; email: string }[],
   leadWhere: Prisma.LeadWhereInput
 ) {
+  const start = Date.now()
   const base: Prisma.LeadWhereInput = {
     assignedAdvisorId: { not: null },
     ...leadWhere,
@@ -130,7 +139,7 @@ export async function buildAdvisorPerformance(
   const d = countMap(mapGroupByAdvisor(dropped))
   const c = countMap(mapGroupByAdvisor(clawback))
 
-  return advisors
+  const result = advisors
     .map((a) => ({
       id: a.id,
       name: a.name,
@@ -148,6 +157,10 @@ export async function buildAdvisorPerformance(
         b.clawback - a.clawback ||
         b.forwardedToCaseAssessor - a.forwardedToCaseAssessor
     )
+  logQueryTiming(PROFILE_SCOPE, 'buildAdvisorPerformance', Date.now() - start, {
+    advisors: advisors.length,
+  })
+  return result
 }
 
 export async function buildAssessorPerformance(
@@ -155,6 +168,7 @@ export async function buildAssessorPerformance(
   assessors: { id: string; name: string; email: string }[],
   leadWhere: Prisma.LeadWhereInput
 ) {
+  const start = Date.now()
   const base: Prisma.LeadWhereInput = {
     assignedCaseAssessorId: { not: null },
     ...leadWhere,
@@ -194,7 +208,7 @@ export async function buildAssessorPerformance(
   const c = countMap(mapGroupByAssessor(clawback))
   const p = countMap(mapGroupByAssessor(payments))
 
-  return assessors
+  const result = assessors
     .map((s) => ({
       id: s.id,
       name: s.name,
@@ -209,4 +223,8 @@ export async function buildAssessorPerformance(
       (x, y) =>
         y.verified - x.verified || y.dropped - x.dropped || y.clawback - x.clawback
     )
+  logQueryTiming(PROFILE_SCOPE, 'buildAssessorPerformance', Date.now() - start, {
+    assessors: assessors.length,
+  })
+  return result
 }
