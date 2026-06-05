@@ -4,7 +4,15 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Navigation from '@/components/Navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Upload, Loader2, MessageSquare, Search, Filter, Trash2, TrendingUp } from 'lucide-react'
-import { LEAD_PHONE_HELP_TEXT, parseLeadPhoneForStorage } from '@/lib/phone'
+import { LEAD_PHONE_HELP_TEXT } from '@/lib/phone'
+import { apiErrorMessage } from '@/lib/api-error-message'
+import {
+  friendlyLeadImportError,
+  LEAD_IMPORT_ACCEPT,
+  mapLeadImportRows,
+  parseLeadImportFile,
+  validateLeadImportFile,
+} from '@/lib/lead-import'
 import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { LeadSaveQueue } from '@/lib/lead-save-queue'
@@ -100,34 +108,6 @@ export default function AdminLeadsPage() {
     },
     [currentPage, pageSize, searchTerm, filterDisposition, showSelectedOnly]
   )
-
-  const toRecordRows = async (file: File): Promise<Record<string, unknown>[]> => {
-    const lowerName = file.name.toLowerCase()
-    if (lowerName.endsWith('.csv')) {
-      const Papa = (await import('papaparse')).default
-      const text = await file.text()
-      const parsed = Papa.parse<Record<string, unknown>>(text, {
-        header: true,
-        skipEmptyLines: true,
-      })
-      if (parsed.errors.length > 0) {
-        throw new Error(parsed.errors[0]?.message || 'Failed to parse CSV')
-      }
-      return parsed.data
-    }
-
-    const { default: readSheet } = await import('read-excel-file/browser')
-    const rows = (await readSheet(file)) as unknown as unknown[][]
-    if (!rows.length) return []
-    const header = rows[0].map((x) => String(x ?? '').trim())
-    return rows.slice(1).map((row) => {
-      const out: Record<string, unknown> = {}
-      header.forEach((key, idx) => {
-        out[key] = row[idx]
-      })
-      return out
-    })
-  }
 
   const fetchLeadCount = useCallback(async () => {
     if (showSelectedOnly && selectedLeadsRef.current.size === 0) {
@@ -319,93 +299,130 @@ export default function AdminLeadsPage() {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    e.target.value = ''
     if (!file) return
+
+    const earlyError = validateLeadImportFile(file)
+    if (earlyError) {
+      setNotification({ message: earlyError, type: 'warn' })
+      return
+    }
 
     setUploading(true)
     try {
+      let parsedRows: ReturnType<typeof mapLeadImportRows>
+      try {
+        const data = await parseLeadImportFile(file)
+        parsedRows = mapLeadImportRows(data)
+      } catch (parseErr) {
+        console.error('[LEAD IMPORT] parse failed', {
+          file: file.name,
+          size: file.size,
+          type: file.type,
+          error: parseErr,
+        })
+        setNotification({
+          message: friendlyLeadImportError(parseErr, file.name),
+          type: 'warn',
+        })
+        return
+      }
+
+      const formattedData = parsedRows.filter(
+        (r) => (r.firstName || r.lastName) && r.phone !== ''
+      )
+      const droppedInvalidPhone = parsedRows.filter(
+        (r) => (r.firstName || r.lastName) && r.phone === ''
+      ).length
+
+      if (formattedData.length === 0) {
+        setNotification({
+          message:
+            droppedInvalidPhone > 0
+              ? `No rows to import. ${droppedInvalidPhone} row(s) had a name but no valid phone. ${LEAD_PHONE_HELP_TEXT}`
+              : 'No rows to import. Each row needs at least a first or last name and a valid phone number in a column named Phone (or Number).',
+          type: 'warn',
+        })
+        return
+      }
+
       const formData = new FormData()
       formData.append('file', file)
-      const uploadRes = await fetch('/api/admin/upload', { method: 'POST', body: formData })
-      const uploadData = await uploadRes.json()
-      
-      if (!uploadData.success) throw new Error(uploadData.error || 'Upload failed')
+      const uploadRes = await fetch('/api/admin/upload', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include',
+      })
 
+      let uploadData: { success?: boolean; result?: { secure_url?: string }; error?: string }
       try {
-          const data = await toRecordRows(file)
-          const parsedRows = data.map((row) => {
-            const raw = row.phone ?? row.Phone ?? row.Number ?? ''
-            return {
-              title: row.title || row.Title || '',
-              firstName: row.firstName || row.FirstName || row['First Name'] || '',
-              lastName: row.lastName || row.LastName || row['Last Name'] || '',
-              email: row.email || row.Email || row['E-mail'] || row['Email Address'] || '',
-              addressLine1: row.addressLine1 || row['Address Line 1'] || row['Address 1'] || row.address1 || '',
-              addressLine2: row.addressLine2 || row['Address Line 2'] || row['Address 2'] || row.address2 || '',
-              addressLine3: row.addressLine3 || row['Address Line 3'] || row['Address 3'] || row.address3 || '',
-              addressLine4: row.addressLine4 || row['Address Line 4'] || row['Address 4'] || row.address4 || '',
-              address: row.address || row.Address || row['Full Address'] || '',
-              postCode: row.postCode || row.PostCode || row['Post Code'] || '',
-              phone: parseLeadPhoneForStorage(raw) ?? '',
-              remarks: row.remarks || row.Remarks || '',
-            }
-          })
-          const formattedData = parsedRows.filter(
-            (r) => (r.firstName || r.lastName) && r.phone !== ''
-          )
-          const droppedInvalidPhone = parsedRows.filter(
-            (r) => (r.firstName || r.lastName) && r.phone === ''
-          ).length
-
-          if (formattedData.length === 0) {
-            setNotification({
-              message:
-                droppedInvalidPhone > 0
-                  ? `No rows to import. ${droppedInvalidPhone} skipped (missing or invalid phone). ${LEAD_PHONE_HELP_TEXT}`
-                  : 'No rows found with both a name and a valid phone.',
-              type: 'warn',
-            })
-            return
-          }
-
-          const res = await fetch('/api/admin/leads', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              leads: formattedData,
-              fileUrl: uploadData.result.secure_url,
-            }),
-          })
-          const result = await res.json().catch(() => ({}))
-
-          if (!res.ok || !result.success) {
-            setNotification({
-              message: typeof result.error === 'string' ? result.error : 'Import failed',
-              type: 'warn',
-            })
-            return
-          }
-
-          const parts = [
-            `Created ${result.createdCount} leads`,
-            result.skippedCount > 0
-              ? `skipped ${result.skippedCount} (duplicate or invalid)`
-              : null,
-            droppedInvalidPhone > 0
-              ? `${droppedInvalidPhone} row(s) dropped (missing or invalid phone)`
-              : null,
-          ].filter(Boolean)
-          setNotification({ message: `${parts.join('. ')}.`, type: 'success' })
-          setTotalLeads(null)
-          setCurrentPage(1)
-          void fetchLeads({ page: 1 })
-      } catch (parseErr: any) {
-          setNotification({
-            message: parseErr?.message ?? 'Failed to parse file',
-            type: 'warn',
-          })
+        uploadData = await uploadRes.json()
+      } catch {
+        setNotification({
+          message: await apiErrorMessage(uploadRes, 'Upload failed — server returned an invalid response.'),
+          type: 'warn',
+        })
+        return
       }
-    } catch (err: any) {
-      setNotification({ message: err.message, type: 'warn' })
+
+      if (!uploadRes.ok || !uploadData.success) {
+        setNotification({
+          message:
+            uploadData.error ||
+            (await apiErrorMessage(uploadRes, 'Could not store the file on the server.')),
+          type: 'warn',
+        })
+        return
+      }
+
+      const res = await fetch('/api/admin/leads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          leads: formattedData,
+          fileUrl: uploadData.result?.secure_url ?? null,
+        }),
+      })
+
+      let result: { success?: boolean; error?: string; createdCount?: number; skippedCount?: number }
+      try {
+        result = await res.json()
+      } catch {
+        setNotification({
+          message: await apiErrorMessage(res, 'Import failed — server returned an invalid response.'),
+          type: 'warn',
+        })
+        return
+      }
+
+      if (!res.ok || !result.success) {
+        setNotification({
+          message: result.error || (await apiErrorMessage(res, 'Import failed on the server.')),
+          type: 'warn',
+        })
+        return
+      }
+
+      const parts = [
+        `Imported ${result.createdCount ?? 0} new lead(s)`,
+        (result.skippedCount ?? 0) > 0
+          ? `${result.skippedCount} skipped (duplicate phone or invalid row)`
+          : null,
+        droppedInvalidPhone > 0
+          ? `${droppedInvalidPhone} row(s) skipped (name present but phone missing or invalid)`
+          : null,
+      ].filter(Boolean)
+      setNotification({ message: `${parts.join('. ')}.`, type: 'success' })
+      setTotalLeads(null)
+      setCurrentPage(1)
+      void fetchLeads({ page: 1 })
+    } catch (err) {
+      console.error('[LEAD IMPORT] upload/import failed', { file: file.name, error: err })
+      setNotification({
+        message: friendlyLeadImportError(err, file.name),
+        type: 'warn',
+      })
     } finally {
       setUploading(false)
     }
@@ -736,7 +753,7 @@ export default function AdminLeadsPage() {
                 <button disabled={uploading} className="bg-neutral-800 hover:bg-neutral-700 text-white px-4 py-2 rounded-lg text-sm font-bold transition-colors flex items-center gap-2 border border-neutral-700">
                   {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />} UPLOAD
                 </button>
-                <input type="file" accept=".xlsx,.csv" onChange={handleFileUpload} className="absolute inset-0 opacity-0 cursor-pointer" disabled={uploading} />
+                <input type="file" accept={LEAD_IMPORT_ACCEPT} onChange={handleFileUpload} className="absolute inset-0 opacity-0 cursor-pointer" disabled={uploading} />
               </div>
               
               <div className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-lg p-1">

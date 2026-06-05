@@ -16,9 +16,11 @@ import {
 import { invalidateAdminDashboardCache } from '@/lib/admin-dashboard-cache'
 import { refreshDashboardStatsAfterLeadMutation } from '@/lib/dashboard-stats-snapshot'
 import { leadSearchFilter, normalizeLeadSearch } from '@/lib/lead-search-filter'
+import { friendlyServerImportError } from '@/lib/api-error-message'
 import { logQueryTiming, timed } from '@/lib/query-timing-log'
 
 const LOG_SCOPE = 'ADMIN LEADS'
+const IMPORT_LOG_SCOPE = 'ADMIN LEADS IMPORT'
 const secret = getJwtSecret()
 
 export const preferredRegion = 'bom1'
@@ -310,15 +312,27 @@ export async function POST(req: NextRequest) {
     if (payload.role !== 'ADMIN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const body = await req.json()
-    const leadsData = body.leads as any[]
+    const leadsData = body.leads as unknown
 
     if (!Array.isArray(leadsData)) {
-      return NextResponse.json({ error: 'No data provided' }, { status: 400 })
+      return NextResponse.json(
+        { error: 'No lead rows were sent. The file may be empty or could not be parsed.' },
+        { status: 400 }
+      )
     }
 
     if (leadsData.length === 0) {
       return NextResponse.json({ success: true, createdCount: 0, skippedCount: 0 })
     }
+
+    if (leadsData.length > 10_000) {
+      return NextResponse.json(
+        { error: `Too many rows (${leadsData.length}). Import at most 10,000 leads per file.` },
+        { status: 400 }
+      )
+    }
+
+    console.log(`[${IMPORT_LOG_SCOPE}] start rows=${leadsData.length}`)
 
     let createdCount = 0
     let skippedCount = 0
@@ -391,10 +405,13 @@ export async function POST(req: NextRequest) {
       void refreshDashboardStatsAfterLeadMutation()
     }
 
+    console.log(
+      `[${IMPORT_LOG_SCOPE}] done created=${createdCount} skipped=${skippedCount} received=${leadsData.length}`
+    )
     return NextResponse.json({ success: true, createdCount, skippedCount })
   } catch (error) {
-    console.error(error)
-    return NextResponse.json({ error: 'Server error' }, { status: 500 })
+    console.error(`[${IMPORT_LOG_SCOPE}] failed`, error)
+    return NextResponse.json({ error: friendlyServerImportError(error) }, { status: 500 })
   }
 }
 
