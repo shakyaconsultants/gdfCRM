@@ -3,6 +3,26 @@ import { parseLeadPhoneForStorage } from '@/lib/phone'
 
 export const LEAD_IMPORT_ACCEPT = '.xlsx,.csv'
 
+type ExcelSheet = { sheet?: string; data?: unknown[] }
+
+/** Accept Row[][] from readSheet or legacy mistaken readXlsxFile [{ sheet, data }]. */
+function normalizeExcelRows(parsed: unknown): unknown[][] {
+  if (!Array.isArray(parsed) || parsed.length === 0) return []
+
+  const first = parsed[0]
+  if (
+    first &&
+    typeof first === 'object' &&
+    !Array.isArray(first) &&
+    'data' in first &&
+    Array.isArray((first as ExcelSheet).data)
+  ) {
+    return (first as ExcelSheet).data as unknown[][]
+  }
+
+  return parsed as unknown[][]
+}
+
 export type LeadImportRow = {
   title: string
   firstName: string
@@ -111,10 +131,13 @@ export async function parseLeadImportFile(file: File): Promise<Record<string, un
   }
 
   try {
-    const { default: readSheet } = await import('read-excel-file/browser')
-    const rows = await readSheet(file)
+    // Named export `readSheet` returns Row[][]. The package `default` is readXlsxFile
+    // which returns { sheet, data }[] — using default by mistake made rows[0] a sheet object.
+    const { readSheet } = await import('read-excel-file/browser')
+    const parsed = await readSheet(file)
+    const rows = normalizeExcelRows(parsed)
 
-    if (!Array.isArray(rows) || rows.length === 0) {
+    if (rows.length === 0) {
       throw new Error('The Excel file is empty or has no sheets with data.')
     }
 
