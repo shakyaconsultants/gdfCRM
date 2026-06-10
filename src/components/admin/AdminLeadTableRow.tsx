@@ -2,6 +2,7 @@
 
 import { memo } from 'react'
 import { ChevronDown, ChevronRight, MessageSquare, Copy } from 'lucide-react'
+import DispositionSelect from '@/components/employee/DispositionSelect'
 
 export type AdminLeadRow = {
   id: string
@@ -24,6 +25,9 @@ type Props = {
   onToggleExpand: () => void
   onToggleSelect: () => void
   onCopyPhone: (phone: string) => void
+  dispositionOptions: readonly string[]
+  onDispositionChange: (disposition: string) => void
+  hasIntakeData?: boolean
   onVerifiedChange: (checked: boolean) => void
   onPaidChange: (checked: boolean) => void
 }
@@ -35,6 +39,9 @@ function AdminLeadTableRow({
   onToggleExpand,
   onToggleSelect,
   onCopyPhone,
+  dispositionOptions,
+  onDispositionChange,
+  hasIntakeData = false,
   onVerifiedChange,
   onPaidChange,
 }: Props) {
@@ -77,20 +84,18 @@ function AdminLeadTableRow({
       <td className="p-4 text-center text-xs font-bold text-amber-500/70">
         {lead.assignedAdvisor?.name || '-'}
       </td>
-      <td className="p-4">
-        <span
-          className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
-            lead.disposition === 'New'
-              ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-              : 'bg-neutral-500/10 text-neutral-500 border-neutral-500/20'
-          }`}
-        >
-          {lead.disposition}
-        </span>
+      <td className="p-4 align-top min-w-[9rem]">
+        <DispositionSelect
+          value={lead.disposition}
+          options={dispositionOptions}
+          onSelect={onDispositionChange}
+        />
       </td>
       <td className="p-4 text-center">
-        <button type="button" onClick={onToggleExpand}>
-          <MessageSquare className="w-4 h-4 text-neutral-600 hover:text-blue-400" />
+        <button type="button" onClick={onToggleExpand} title="Open lead details & intake form">
+          <MessageSquare
+            className={`w-4 h-4 ${hasIntakeData ? 'text-blue-400' : 'text-neutral-600 hover:text-blue-400'}`}
+          />
         </button>
       </td>
       <td className="p-4 text-center">

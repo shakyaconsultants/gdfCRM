@@ -17,6 +17,7 @@ import { invalidateAdminDashboardCache } from '@/lib/admin-dashboard-cache'
 import { refreshDashboardStatsAfterLeadMutation } from '@/lib/dashboard-stats-snapshot'
 import { leadSearchFilter, normalizeLeadSearch } from '@/lib/lead-search-filter'
 import { friendlyServerImportError } from '@/lib/api-error-message'
+import { normalizeLeadImportFileName } from '@/lib/lead-import-batch'
 import { logQueryTiming, timed } from '@/lib/query-timing-log'
 
 const LOG_SCOPE = 'ADMIN LEADS'
@@ -110,15 +111,27 @@ function buildAdminLeadWhere(opts: {
   search?: string
   disposition?: string
   unassignedOnly?: boolean
+  assignedToId?: string
+  importId?: string
   ids?: string[]
 }): Prisma.LeadWhereInput {
   const and: Prisma.LeadWhereInput[] = []
+
+  if (opts.importId === 'none') {
+    and.push({
+      OR: [{ importId: null }, { importId: { isSet: false } }],
+    })
+  } else if (opts.importId) {
+    and.push({ importId: opts.importId })
+  }
 
   if (opts.disposition && opts.disposition !== 'All') {
     and.push({ disposition: opts.disposition })
   }
 
-  if (opts.unassignedOnly) {
+  if (opts.assignedToId) {
+    and.push({ assignedToId: opts.assignedToId })
+  } else if (opts.unassignedOnly) {
     and.push({
       OR: [{ assignedToId: null }, { assignedToId: { isSet: false } }],
     })
@@ -156,6 +169,12 @@ export async function GET(req: NextRequest) {
     const search = normalizeLeadSearch(searchParams.get('search'))
     const disposition = searchParams.get('disposition') ?? 'All'
     const unassignedOnly = searchParams.get('unassignedOnly') === 'true'
+    const assignedToIdRaw = searchParams.get('assignedToId')?.trim() ?? ''
+    const assignedToId =
+      !unassignedOnly && assignedToIdRaw.length > 0 ? assignedToIdRaw : undefined
+    const importIdRaw = searchParams.get('importId')?.trim() ?? ''
+    const importId =
+      importIdRaw === 'none' || importIdRaw.length > 0 ? importIdRaw : undefined
     const ids = uniqStrings(searchParams.get('ids')?.split(',') ?? [])
 
     const mode = countOnly ? 'countOnly' : idsOnly ? 'idsOnly' : 'list'
@@ -164,6 +183,8 @@ export async function GET(req: NextRequest) {
       search,
       disposition,
       unassignedOnly,
+      assignedToId,
+      importId,
       ids: ids.length ? ids : undefined,
     })
 
@@ -171,6 +192,8 @@ export async function GET(req: NextRequest) {
       search,
       disposition,
       unassignedOnly,
+      assignedToId: assignedToId ?? '',
+      importId: importId ?? '',
       idsKey: ids.join(','),
     })
 
@@ -313,6 +336,13 @@ export async function POST(req: NextRequest) {
 
     const body = await req.json()
     const leadsData = body.leads as unknown
+    const sourceFileName =
+      typeof body.sourceFileName === 'string' ? body.sourceFileName : 'import'
+    const fileName = normalizeLeadImportFileName(body.fileName, sourceFileName)
+    const fileUrl =
+      typeof body.fileUrl === 'string' && body.fileUrl.trim().length > 0
+        ? body.fileUrl.trim()
+        : null
 
     if (!Array.isArray(leadsData)) {
       return NextResponse.json(
@@ -332,7 +362,15 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    console.log(`[${IMPORT_LOG_SCOPE}] start rows=${leadsData.length}`)
+    console.log(`[${IMPORT_LOG_SCOPE}] start rows=${leadsData.length} file=${fileName}`)
+
+    const leadImport = await db.leadImport.create({
+      data: {
+        fileName,
+        fileUrl,
+        uploadedById: typeof payload.id === 'string' ? payload.id : null,
+      },
+    })
 
     let createdCount = 0
     let skippedCount = 0
@@ -393,6 +431,7 @@ export async function POST(req: NextRequest) {
           postCode: lead.postCode ? String(lead.postCode) : null,
           phone: phoneStr,
           remarks: lead.remarks ? String(lead.remarks) : null,
+          importId: leadImport.id,
         })
       }
     }
@@ -406,9 +445,15 @@ export async function POST(req: NextRequest) {
     }
 
     console.log(
-      `[${IMPORT_LOG_SCOPE}] done created=${createdCount} skipped=${skippedCount} received=${leadsData.length}`
+      `[${IMPORT_LOG_SCOPE}] done created=${createdCount} skipped=${skippedCount} received=${leadsData.length} importId=${leadImport.id}`
     )
-    return NextResponse.json({ success: true, createdCount, skippedCount })
+    return NextResponse.json({
+      success: true,
+      createdCount,
+      skippedCount,
+      importId: leadImport.id,
+      fileName: leadImport.fileName,
+    })
   } catch (error) {
     console.error(`[${IMPORT_LOG_SCOPE}] failed`, error)
     return NextResponse.json({ error: friendlyServerImportError(error) }, { status: 500 })

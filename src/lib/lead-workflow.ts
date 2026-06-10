@@ -17,6 +17,8 @@ export const LEAD_DISPOSITIONS = [
   'Have Debts & Hang up',
   'Already in a plan',
   'Prospect',
+  'Other',
+  'Manual',
 ] as const
 
 export type LeadDisposition = (typeof LEAD_DISPOSITIONS)[number]

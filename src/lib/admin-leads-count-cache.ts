@@ -6,9 +6,11 @@ export function countCacheKey(filters: {
   search: string
   disposition: string
   unassignedOnly: boolean
+  assignedToId: string
+  importId: string
   idsKey: string
 }): string {
-  return `${filters.search}|${filters.disposition}|${filters.unassignedOnly}|${filters.idsKey}`
+  return `${filters.search}|${filters.disposition}|${filters.unassignedOnly}|${filters.assignedToId}|${filters.importId}|${filters.idsKey}`
 }
 
 export function getCachedCount(key: string): number | null {

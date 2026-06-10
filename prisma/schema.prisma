@@ -106,16 +106,32 @@ model Lead {
   verifiedSale     Boolean   @default(false)
   verifiedAt       DateTime?
   paymentReceived  Boolean   @default(false)
+  /// Batch from admin CSV/xlsx upload — used to filter leads by source file in admin panel.
+  importId         String?   @db.ObjectId
+  import           LeadImport? @relation(fields: [importId], references: [id])
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
   documents        LeadDocument[]
 
   @@index([createdAt(sort: Desc)])
+  @@index([importId, createdAt(sort: Desc)])
   @@index([assignedToId, createdAt(sort: Desc)])
   @@index([assignedAdvisorId, createdAt(sort: Desc)])
   @@index([assignedCaseAssessorId, createdAt(sort: Desc)])
   @@index([disposition, createdAt(sort: Desc)])
   @@index([updatedAt(sort: Desc)])
+}
+
+/// One admin upload (CSV/xlsx); leads created from that import link here.
+model LeadImport {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  fileName     String
+  fileUrl      String?
+  uploadedById String?  @db.ObjectId
+  createdAt    DateTime @default(now())
+  leads        Lead[]
+
+  @@index([createdAt(sort: Desc)])
 }
 
 model LeadDocument {
