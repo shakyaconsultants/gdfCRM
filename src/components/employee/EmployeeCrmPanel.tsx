@@ -81,6 +81,8 @@ export default function EmployeeCrmPanel() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterDisposition, setFilterDisposition] = useState('All')
   const lastSyncRef = useRef<string | null>(null)
+  const totalLeadsRef = useRef(0)
+  totalLeadsRef.current = totalLeads
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   
@@ -160,12 +162,12 @@ export default function EmployeeCrmPanel() {
   const buildLeadsQuery = useCallback(
     (opts?: { since?: string }) => {
       const params = new URLSearchParams()
+      params.set('stats', 'true')
       if (opts?.since) {
         params.set('since', opts.since)
       } else {
         params.set('page', String(currentPage))
         params.set('pageSize', String(pageSize))
-        params.set('stats', 'true')
         if (searchTerm) params.set('search', searchTerm)
         if (filterDisposition !== 'All') params.set('disposition', filterDisposition)
       }
@@ -187,9 +189,22 @@ export default function EmployeeCrmPanel() {
           opts?.poll ? Promise.resolve(null) : fetch('/api/employee/advisors', { cache: 'no-store' }),
         ])
         const leadsData = await leadsRes.json()
-        if (opts?.poll && leadsData.deltas) {
-          const skipIds = saveQueueRef.current.pendingLeadIds()
-          setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas as Lead[], { skipIds }))
+        if (opts?.poll && lastSyncRef.current) {
+          if (typeof leadsData.total === 'number') {
+            const prevTotal = totalLeadsRef.current
+            setTotalLeads(leadsData.total)
+            if (leadsData.total !== prevTotal) {
+              if (leadsData.stats) setKpiStats(leadsData.stats)
+              if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
+              await fetchLeads({ silent: true })
+              return
+            }
+          }
+          if (leadsData.stats) setKpiStats(leadsData.stats)
+          if (Array.isArray(leadsData.deltas) && leadsData.deltas.length > 0) {
+            const skipIds = saveQueueRef.current.pendingLeadIds()
+            setLeads((prev) => mergeLeadDeltas(prev, leadsData.deltas as Lead[], { skipIds }))
+          }
           if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
           return
         }

@@ -6,6 +6,7 @@ export function employeeAssignUpdate(assignedToId: string) {
   return {
     assignedToId,
     assignedDate: new Date(),
+    updatedAt: new Date(),
   }
 }
 
@@ -14,6 +15,7 @@ export function employeeUnassignUpdate() {
   return {
     assignedToId: null,
     assignedDate: null,
+    updatedAt: new Date(),
   }
 }
 

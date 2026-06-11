@@ -18,14 +18,23 @@ export async function GET(req: NextRequest) {
     const since = parseSinceParam(req.nextUrl.searchParams.get('since'))
 
     if (since) {
+      const includeStats = req.nextUrl.searchParams.get('stats') === 'true'
       const deltas = await db.lead.findMany({
         where: { ...baseWhere, updatedAt: { gt: since } },
         select: EMPLOYEE_LEAD_LIST_SELECT,
         orderBy: { updatedAt: 'desc' },
         take: DELTA_TAKE,
       })
+      const [total, stats] = includeStats
+        ? await Promise.all([
+            db.lead.count({ where: baseWhere }),
+            countAssignedLeadStats(db, baseWhere),
+          ])
+        : [undefined, undefined]
       const response = NextResponse.json({
         deltas,
+        ...(includeStats && typeof total === 'number' ? { total } : {}),
+        ...(includeStats && stats ? { stats } : {}),
         serverTime: new Date().toISOString(),
       })
       response.headers.set('Cache-Control', 'no-store')
