@@ -937,12 +937,14 @@ export default function AdminLeadsPage() {
     setPageLoading(true)
     pausePollRef.current = true
     try {
-      // Unassigned leads from the active import batch only — not search/disposition filters.
-      const params = buildLeadsQuery({
-        page: 1,
-        pageSize: count,
-        idsOnly: true,
-        unassignedOnly: true,
+      // Fresh assignable pool only: no employee, disposition New, active import batch — ignore table filters.
+      const params = new URLSearchParams({
+        page: '1',
+        pageSize: String(count),
+        idsOnly: 'true',
+        unassignedOnly: 'true',
+        disposition: LEAD_DISPOSITIONS[0],
+        importId: filterImportId,
       })
       const res = await fetch(`/api/admin/leads?${params.toString()}`, {
         cache: 'no-store',
@@ -962,8 +964,8 @@ export default function AdminLeadsPage() {
       setNotification({
         message:
           ids.length > 0
-            ? `Selected ${ids.length} unassigned lead(s) from ${poolTotal.toLocaleString()} in "${batchLabel}" (newest first)`
-            : `No unassigned leads in "${batchLabel}" — import fresh data or clear the employee filter`,
+            ? `Selected ${ids.length} unassigned · New lead(s) from ${poolTotal.toLocaleString()} in "${batchLabel}" (newest first)`
+            : `No unassigned · New leads in "${batchLabel}" — import fresh data or run repair`,
         type: ids.length > 0 ? 'success' : 'warn',
       })
     } finally {
