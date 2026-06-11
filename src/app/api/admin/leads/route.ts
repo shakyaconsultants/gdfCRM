@@ -4,7 +4,7 @@ import { jwtVerify } from 'jose'
 import type { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { parseLeadPhoneForStorage } from '@/lib/phone'
-import { employeeAssignUpdate } from '@/lib/lead-assignment'
+import { employeeAssignUpdate, employeeUnassignUpdate } from '@/lib/lead-assignment'
 import { getJwtSecret } from '@/lib/jwt-secret'
 import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
 import {
@@ -133,7 +133,11 @@ function buildAdminLeadWhere(opts: {
     and.push({ assignedToId: opts.assignedToId })
   } else if (opts.unassignedOnly) {
     and.push({
-      OR: [{ assignedToId: null }, { assignedToId: { isSet: false } }],
+      OR: [
+        { assignedToId: null },
+        { assignedToId: { isSet: false } },
+        { assignedToId: '' },
+      ],
     })
   }
 
@@ -469,11 +473,63 @@ export async function PUT(req: NextRequest) {
     if (payload.role !== 'ADMIN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
     const body = await req.json()
-    const { leadIds, assignedToId } = body
+    const { leadIds, assignedToId, unassign: unassignFlag } = body
 
     const normalizedLeadIds = uniqStrings(leadIds)
     if (normalizedLeadIds.length === 0) {
       return NextResponse.json({ error: 'Select at least one lead.' }, { status: 400 })
+    }
+
+    const matchedCount = await db.lead.count({
+      where: { id: { in: normalizedLeadIds } },
+    })
+    if (matchedCount === 0) {
+      return NextResponse.json(
+        {
+          error:
+            'None of the selected leads exist in the database. Deselect all, pick leads from the current import batch, and try again.',
+          updatedCount: 0,
+          requestedCount: normalizedLeadIds.length,
+          matchedCount: 0,
+        },
+        { status: 400 }
+      )
+    }
+
+    const shouldUnassign =
+      unassignFlag === true ||
+      assignedToId === null ||
+      (typeof assignedToId === 'string' && assignedToId.trim() === '')
+
+    if (shouldUnassign) {
+      const updated = await db.lead.updateMany({
+        where: { id: { in: normalizedLeadIds } },
+        data: employeeUnassignUpdate(),
+      })
+
+      invalidateCountCache()
+      invalidateAdminDashboardCache()
+      void refreshDashboardStatsAfterLeadMutation()
+
+      if (updated.count === 0) {
+        return NextResponse.json(
+          {
+            error: 'Unassign did not update any leads. Please try again.',
+            updatedCount: 0,
+            requestedCount: normalizedLeadIds.length,
+            matchedCount,
+          },
+          { status: 500 }
+        )
+      }
+
+      return NextResponse.json({
+        success: true,
+        unassigned: true,
+        updatedCount: updated.count,
+        requestedCount: normalizedLeadIds.length,
+        matchedCount,
+      })
     }
 
     const targetId =
@@ -493,6 +549,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid employee selection' }, { status: 400 })
     }
 
+    // Assign or transfer — overwrites any previous assignedToId.
     const updated = await db.lead.updateMany({
       where: { id: { in: normalizedLeadIds } },
       data: employeeAssignUpdate(employee.id),
@@ -502,13 +559,28 @@ export async function PUT(req: NextRequest) {
     invalidateAdminDashboardCache()
     void refreshDashboardStatsAfterLeadMutation()
 
+    if (updated.count === 0) {
+      return NextResponse.json(
+        {
+          error: 'Assignment did not update any leads. Please try again.',
+          updatedCount: 0,
+          requestedCount: normalizedLeadIds.length,
+          matchedCount,
+        },
+        { status: 500 }
+      )
+    }
+
     return NextResponse.json({
       success: true,
       updatedCount: updated.count,
+      requestedCount: normalizedLeadIds.length,
+      matchedCount,
       assignedToId: employee.id,
       assignedToName: employee.name,
     })
-  } catch {
+  } catch (error) {
+    console.error('[admin/leads PUT]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }

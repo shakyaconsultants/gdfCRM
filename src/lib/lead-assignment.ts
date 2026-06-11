@@ -9,6 +9,14 @@ export function employeeAssignUpdate(assignedToId: string) {
   }
 }
 
+/** Remove employee ownership — lead returns to the unassigned pool. */
+export function employeeUnassignUpdate() {
+  return {
+    assignedToId: null,
+    assignedDate: null,
+  }
+}
+
 /** Totally unassigned (no employee) — used by AUTO SELECT for first-time assignment. */
 export function isTotallyUnassignedLead(lead: {
   assignedToId?: string | null

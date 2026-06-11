@@ -16,6 +16,7 @@ import {
   Save,
   FileText,
   Pencil,
+  UserMinus,
 } from 'lucide-react'
 import EmployeeIntakeFormEditor from '@/components/employee/EmployeeIntakeFormEditor'
 import { parseEmployeeIntakeForm, type EmployeeIntakeForm } from '@/lib/employee-intake-form'
@@ -85,6 +86,7 @@ export default function AdminLeadsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [assigning, setAssigning] = useState(false)
+  const [unassigning, setUnassigning] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [loading, setLoading] = useState(true)
   const [pageLoading, setPageLoading] = useState(false)
@@ -93,7 +95,7 @@ export default function AdminLeadsPage() {
   /** '' = all, 'unassigned' = no assignee, else employee user id */
   const [filterEmployeeId, setFilterEmployeeId] = useState('')
   /** '' = none selected (no query), 'none' = legacy pool, else import batch id */
-  const [filterImportId, setFilterImportId] = useState('')
+  const [filterImportId, setFilterImportId] = useState('none')
   const [leadImports, setLeadImports] = useState<LeadImportBatch[]>([])
   const [legacyImportCount, setLegacyImportCount] = useState(0)
   const [importsLoading, setImportsLoading] = useState(true)
@@ -179,8 +181,9 @@ export default function AdminLeadsPage() {
       if (current && current !== 'none' && imports.some((i) => i.id === current)) {
         return current
       }
-      if (legacyCount > 0) return 'none'
+      // Default to the newest import batch so fresh uploads are ready to assign.
       if (imports.length > 0) return imports[0].id
+      if (legacyCount > 0) return 'none'
       return 'none'
     },
     []
@@ -300,7 +303,7 @@ export default function AdminLeadsPage() {
       }
 
       deselectAll()
-      setFilterImportId('')
+      setFilterImportId('none')
       importFilterInitializedRef.current = false
       setTotalLeads(null)
       setCurrentPage(1)
@@ -678,9 +681,20 @@ export default function AdminLeadsPage() {
   }
 
   const handleAssign = async () => {
-    if (selectedLeads.size === 0 || !selectedEmployeeId || assigning) return
+    if (selectedLeads.size === 0 || assigning || unassigning) return
+    if (!selectedEmployeeId) {
+      setNotification({ message: 'Select an employee before assigning leads.', type: 'warn' })
+      return
+    }
     const ids = Array.from(selectedLeads)
     const employee = employees.find((e) => e.id === selectedEmployeeId)
+    const fromEmployeeName =
+      filterEmployeeId && filterEmployeeId !== 'unassigned'
+        ? employees.find((e) => e.id === filterEmployeeId)?.name
+        : null
+    const isTransfer = Boolean(
+      fromEmployeeName && fromEmployeeName !== employee?.name
+    )
     setAssigning(true)
     pausePollRef.current = true
     setLeads((prev) =>
@@ -688,6 +702,7 @@ export default function AdminLeadsPage() {
         ids.includes(l.id)
           ? {
               ...l,
+              assignedToId: selectedEmployeeId,
               assignedTo: employee ? { name: employee.name } : l.assignedTo,
             }
           : l
@@ -697,19 +712,39 @@ export default function AdminLeadsPage() {
       const res = await fetch('/api/admin/leads', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ leadIds: ids, assignedToId: selectedEmployeeId }),
       })
       const payload = await res.json().catch(() => ({}))
-      if (res.ok) {
+      const updatedCount =
+        typeof payload.updatedCount === 'number' ? payload.updatedCount : 0
+      const targetName = payload.assignedToName ?? employee?.name ?? 'employee'
+      if (res.ok && updatedCount > 0) {
         deselectAll()
+        setTotalLeads(null)
         await fetchLeads()
+        void fetchLeadImports()
+        const partial =
+          typeof payload.requestedCount === 'number' &&
+          updatedCount < payload.requestedCount
         setNotification({
-          message: `Assigned ${payload.updatedCount ?? ids.length} lead(s) to ${payload.assignedToName ?? employee?.name ?? 'employee'}`,
-          type: 'success',
+          message: partial
+            ? `${isTransfer ? 'Transferred' : 'Assigned'} ${updatedCount} of ${payload.requestedCount} selected lead(s)${isTransfer ? ` from ${fromEmployeeName} to ${targetName}` : ` to ${targetName}`}. Some selections were stale — deselect and re-select from the current batch.`
+            : isTransfer
+              ? `Transferred ${updatedCount} lead(s) from ${fromEmployeeName} to ${targetName}`
+              : `Assigned ${updatedCount} lead(s) to ${targetName}`,
+          type: partial ? 'warn' : 'success',
         })
       } else {
         await fetchLeads()
-        setNotification({ message: payload.error || 'Failed to assign leads', type: 'warn' })
+        setNotification({
+          message:
+            payload.error ||
+            (updatedCount === 0
+              ? 'No leads were assigned. Deselect all, select leads from the current import batch, then try again.'
+              : 'Failed to assign leads'),
+          type: 'warn',
+        })
       }
     } catch (e) {
       console.error(e)
@@ -718,6 +753,72 @@ export default function AdminLeadsPage() {
     } finally {
       pausePollRef.current = false
       setAssigning(false)
+    }
+  }
+
+  const handleUnassign = async () => {
+    if (selectedLeads.size === 0 || assigning || unassigning) return
+    const count = selectedLeads.size
+    if (
+      !confirm(
+        `Unassign ${count.toLocaleString()} lead(s)? They will return to the unassigned pool and leave the current employee's CRM board.`
+      )
+    ) {
+      return
+    }
+
+    const ids = Array.from(selectedLeads)
+    setUnassigning(true)
+    pausePollRef.current = true
+    setLeads((prev) =>
+      prev.map((l) =>
+        ids.includes(l.id)
+          ? { ...l, assignedToId: null, assignedTo: null }
+          : l
+      )
+    )
+    try {
+      const res = await fetch('/api/admin/leads', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ leadIds: ids, unassign: true }),
+      })
+      const payload = await res.json().catch(() => ({}))
+      const updatedCount =
+        typeof payload.updatedCount === 'number' ? payload.updatedCount : 0
+      if (res.ok && updatedCount > 0) {
+        deselectAll()
+        setTotalLeads(null)
+        await fetchLeads()
+        void fetchLeadImports()
+        const partial =
+          typeof payload.requestedCount === 'number' &&
+          updatedCount < payload.requestedCount
+        setNotification({
+          message: partial
+            ? `Unassigned ${updatedCount} of ${payload.requestedCount} selected lead(s). Some selections were stale.`
+            : `Unassigned ${updatedCount} lead(s) — returned to the unassigned pool`,
+          type: partial ? 'warn' : 'success',
+        })
+      } else {
+        await fetchLeads()
+        setNotification({
+          message:
+            payload.error ||
+            (updatedCount === 0
+              ? 'No leads were unassigned. Deselect all and try again.'
+              : 'Failed to unassign leads'),
+          type: 'warn',
+        })
+      }
+    } catch (e) {
+      console.error(e)
+      await fetchLeads()
+      setNotification({ message: 'Failed to unassign leads', type: 'warn' })
+    } finally {
+      pausePollRef.current = false
+      setUnassigning(false)
     }
   }
 
@@ -801,19 +902,24 @@ export default function AdminLeadsPage() {
   const handleAutoSelect = async () => {
     const count = Number(commonQty)
     if (isNaN(count) || count <= 0) return
+    if (!filterImportId) {
+      setNotification({
+        message: 'Select an import batch first (top dropdown), then use AUTO SELECT.',
+        type: 'warn',
+      })
+      return
+    }
 
     setPageLoading(true)
+    pausePollRef.current = true
     try {
-      // Search the full unassigned pool — not the current search/disposition/selection filters.
-      const params = new URLSearchParams({
-        page: '1',
-        pageSize: String(count),
-        idsOnly: 'true',
-        unassignedOnly: 'true',
+      // Unassigned leads from the active import batch only — not search/disposition filters.
+      const params = buildLeadsQuery({
+        page: 1,
+        pageSize: count,
+        idsOnly: true,
+        unassignedOnly: true,
       })
-      if (filterImportId) {
-        params.set('importId', filterImportId)
-      }
       const res = await fetch(`/api/admin/leads?${params.toString()}`, {
         cache: 'no-store',
         credentials: 'include',
@@ -821,6 +927,10 @@ export default function AdminLeadsPage() {
       const data = await res.json().catch(() => ({}))
       const ids: string[] = res.ok && Array.isArray(data.ids) ? data.ids : []
       const poolTotal = typeof data.total === 'number' ? data.total : ids.length
+      const batchLabel =
+        filterImportId === 'none'
+          ? 'Existing leads'
+          : selectedImportBatch?.fileName ?? 'this batch'
 
       setSelectedLeads(new Set(ids))
       setBulkSelectAll(false)
@@ -828,12 +938,13 @@ export default function AdminLeadsPage() {
       setNotification({
         message:
           ids.length > 0
-            ? `Selected ${ids.length} unassigned lead(s) from ${poolTotal.toLocaleString()} in the pool (newest first)`
-            : 'No unassigned leads in the system — import fresh data or reassign from employees',
+            ? `Selected ${ids.length} unassigned lead(s) from ${poolTotal.toLocaleString()} in "${batchLabel}" (newest first)`
+            : `No unassigned leads in "${batchLabel}" — import fresh data or clear the employee filter`,
         type: ids.length > 0 ? 'success' : 'warn',
       })
     } finally {
       setPageLoading(false)
+      pausePollRef.current = false
     }
   }
 
@@ -1213,9 +1324,27 @@ export default function AdminLeadsPage() {
               </div>
               
               <div className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-lg p-1">
-                <select value={selectedEmployeeId} onChange={e => setSelectedEmployeeId(e.target.value)} className="bg-neutral-950 text-neutral-200 text-xs pl-3 pr-8 py-1.5 focus:outline-none rounded-md border border-neutral-800 max-w-[140px] uppercase">
-                  <option value="">EMPLOYEE...</option>
-                  {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+                <select
+                  value={selectedEmployeeId}
+                  onChange={(e) => setSelectedEmployeeId(e.target.value)}
+                  aria-label="Assign or transfer leads to employee"
+                  title={
+                    filterEmployeeId && filterEmployeeId !== 'unassigned'
+                      ? 'Transfer selected leads to this employee'
+                      : 'Assign selected leads to this employee'
+                  }
+                  className="bg-neutral-950 text-neutral-200 text-xs pl-3 pr-8 py-1.5 focus:outline-none rounded-md border border-neutral-800 max-w-[160px] uppercase"
+                >
+                  <option value="">
+                    {filterEmployeeId && filterEmployeeId !== 'unassigned'
+                      ? 'TRANSFER TO…'
+                      : 'ASSIGN TO…'}
+                  </option>
+                  {employees.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.name}
+                    </option>
+                  ))}
                 </select>
                 {hasSelection && (
                   <button
@@ -1229,7 +1358,35 @@ export default function AdminLeadsPage() {
                     DESELECT ALL
                   </button>
                 )}
-                <button onClick={handleAssign} disabled={assigning} className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-md text-xs font-bold">ASSIGN ({selectedLeads.size})</button>
+                <button
+                  type="button"
+                  onClick={handleUnassign}
+                  disabled={unassigning || assigning || selectedLeads.size === 0}
+                  title="Remove employee assignment from selected leads"
+                  className="bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 text-neutral-300 hover:text-white px-3 py-1.5 rounded-md text-xs font-bold border border-neutral-700 inline-flex items-center gap-1.5"
+                >
+                  {unassigning ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <UserMinus className="w-3.5 h-3.5" />
+                  )}
+                  UNASSIGN ({selectedLeads.size})
+                </button>
+                <button
+                  onClick={handleAssign}
+                  disabled={
+                    assigning ||
+                    unassigning ||
+                    selectedLeads.size === 0 ||
+                    !selectedEmployeeId
+                  }
+                  className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-md text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  {assigning && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {filterEmployeeId && filterEmployeeId !== 'unassigned'
+                    ? `TRANSFER (${selectedLeads.size})`
+                    : `ASSIGN (${selectedLeads.size})`}
+                </button>
               </div>
             </div>
           </div>
