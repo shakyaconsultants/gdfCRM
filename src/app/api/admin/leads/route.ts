@@ -19,6 +19,7 @@ import { leadSearchFilter, normalizeLeadSearch } from '@/lib/lead-search-filter'
 import { friendlyServerImportError } from '@/lib/api-error-message'
 import { normalizeLeadImportFileName } from '@/lib/lead-import-batch'
 import { logQueryTiming, timed } from '@/lib/query-timing-log'
+import { isMongoObjectId } from '@/lib/mongo-object-id'
 
 const LOG_SCOPE = 'ADMIN LEADS'
 const IMPORT_LOG_SCOPE = 'ADMIN LEADS IMPORT'
@@ -58,21 +59,29 @@ type LeadListRow = {
 async function attachAssigneeNames(rows: LeadListRow[]) {
   const userIds = new Set<string>()
   for (const row of rows) {
-    if (row.assignedToId) userIds.add(row.assignedToId)
-    if (row.assignedAdvisorId) userIds.add(row.assignedAdvisorId)
+    if (row.assignedToId && isMongoObjectId(row.assignedToId)) {
+      userIds.add(row.assignedToId)
+    }
+    if (row.assignedAdvisorId && isMongoObjectId(row.assignedAdvisorId)) {
+      userIds.add(row.assignedAdvisorId)
+    }
   }
   const nameById = new Map<string, string>()
   if (userIds.size > 0) {
     const userQueryStart = Date.now()
-    const users = await db.user.findMany({
-      where: { id: { in: [...userIds] } },
-      select: { id: true, name: true },
-    })
-    logQueryTiming(LOG_SCOPE, 'attach names user query', Date.now() - userQueryStart, {
-      ids: userIds.size,
-      rows: users.length,
-    })
-    for (const u of users) nameById.set(u.id, u.name)
+    try {
+      const users = await db.user.findMany({
+        where: { id: { in: [...userIds] } },
+        select: { id: true, name: true },
+      })
+      logQueryTiming(LOG_SCOPE, 'attach names user query', Date.now() - userQueryStart, {
+        ids: userIds.size,
+        rows: users.length,
+      })
+      for (const u of users) nameById.set(u.id, u.name)
+    } catch (userErr) {
+      console.error('[ADMIN LEADS] attach names user query failed', userErr)
+    }
   }
   const mapStart = Date.now()
   const result = rows.map(({ assignedToId, assignedAdvisorId, ...rest }) => ({
@@ -118,9 +127,7 @@ function buildAdminLeadWhere(opts: {
   const and: Prisma.LeadWhereInput[] = []
 
   if (opts.importId === 'none') {
-    and.push({
-      OR: [{ importId: null }, { importId: { isSet: false } }],
-    })
+    and.push(legacyImportWhere())
   } else if (opts.importId) {
     and.push({ importId: opts.importId })
   }
@@ -132,13 +139,7 @@ function buildAdminLeadWhere(opts: {
   if (opts.assignedToId) {
     and.push({ assignedToId: opts.assignedToId })
   } else if (opts.unassignedOnly) {
-    and.push({
-      OR: [
-        { assignedToId: null },
-        { assignedToId: { isSet: false } },
-        { assignedToId: '' },
-      ],
-    })
+    and.push(unassignedEmployeeWhere())
   }
 
   if (opts.ids?.length) {
@@ -149,6 +150,68 @@ function buildAdminLeadWhere(opts: {
   if (searchFilter) and.push(searchFilter)
 
   return and.length ? { AND: and } : {}
+}
+
+/** Legacy leads uploaded before import batches — importId missing or explicitly null. */
+function legacyImportWhere(): Prisma.LeadWhereInput {
+  return {
+    OR: [{ importId: null }, { importId: { isSet: false } }],
+  }
+}
+
+/** Leads with no employee owner (null or field absent). Do not use '' — invalid for @db.ObjectId. */
+function unassignedEmployeeWhere(): Prisma.LeadWhereInput {
+  return {
+    OR: [{ assignedToId: null }, { assignedToId: { isSet: false } }],
+  }
+}
+
+type AdminLeadListFindArgs = {
+  where: Prisma.LeadWhereInput
+  skip: number
+  take: number
+}
+
+async function findAdminLeadListRows(args: AdminLeadListFindArgs): Promise<LeadListRow[]> {
+  const base = {
+    where: args.where,
+    select: ADMIN_LEAD_LIST_SELECT,
+    skip: args.skip,
+    take: args.take,
+  }
+
+  try {
+    return await db.lead.findMany({ ...base, orderBy: { createdAt: 'desc' } })
+  } catch (firstErr) {
+    console.warn('[ADMIN LEADS] findMany orderBy createdAt failed, retrying id desc', firstErr)
+    try {
+      return await db.lead.findMany({ ...base, orderBy: { id: 'desc' } })
+    } catch (secondErr) {
+      console.warn('[ADMIN LEADS] findMany orderBy id failed, retrying without order', secondErr)
+      return await db.lead.findMany(base)
+    }
+  }
+}
+
+async function findAdminLeadIds(args: AdminLeadListFindArgs): Promise<{ id: string }[]> {
+  const base = {
+    where: args.where,
+    select: { id: true },
+    skip: args.skip,
+    take: args.take,
+  }
+
+  try {
+    return await db.lead.findMany({ ...base, orderBy: { createdAt: 'desc' } })
+  } catch (firstErr) {
+    console.warn('[ADMIN LEADS] findMany ids orderBy createdAt failed, retrying id desc', firstErr)
+    try {
+      return await db.lead.findMany({ ...base, orderBy: { id: 'desc' } })
+    } catch (secondErr) {
+      console.warn('[ADMIN LEADS] findMany ids orderBy id failed, retrying without order', secondErr)
+      return await db.lead.findMany(base)
+    }
+  }
 }
 
 export async function GET(req: NextRequest) {
@@ -242,14 +305,7 @@ export async function GET(req: NextRequest) {
         const rows = await timed(
           LOG_SCOPE,
           'findMany idsOnly',
-          () =>
-            db.lead.findMany({
-              where,
-              select: { id: true },
-              orderBy: { createdAt: 'desc' },
-              skip,
-              take,
-            }),
+          () => findAdminLeadIds({ where, skip, take }),
           { mode, page, take }
         )
         logQueryTiming(LOG_SCOPE, 'GET total', Date.now() - reqStart, { mode, page, take })
@@ -263,13 +319,7 @@ export async function GET(req: NextRequest) {
       }
 
       const countStart = Date.now()
-      const rowsPromise = db.lead.findMany({
-        where,
-        select: { id: true },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take,
-      })
+      const rowsPromise = findAdminLeadIds({ where, skip, take })
       const [total, rows] = await Promise.all([db.lead.count({ where }), rowsPromise])
       logQueryTiming(LOG_SCOPE, 'count', Date.now() - countStart, { mode, page, take })
       logQueryTiming(LOG_SCOPE, 'findMany idsOnly', Date.now() - countStart, {
@@ -295,10 +345,8 @@ export async function GET(req: NextRequest) {
       LOG_SCOPE,
       'findMany',
       () =>
-        db.lead.findMany({
+        findAdminLeadListRows({
           where,
-          select: ADMIN_LEAD_LIST_SELECT,
-          orderBy: { createdAt: 'desc' },
           skip,
           take: ADMIN_LEADS_PAGE_SIZE + 1,
         }),
@@ -323,7 +371,8 @@ export async function GET(req: NextRequest) {
     response.headers.set('Cache-Control', 'private, no-store')
     return response
   } catch (error) {
-    console.error('[admin/leads GET]', error)
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error('[admin/leads GET]', detail, error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }
