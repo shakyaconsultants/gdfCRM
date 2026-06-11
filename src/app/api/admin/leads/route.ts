@@ -4,7 +4,13 @@ import { jwtVerify } from 'jose'
 import type { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { parseLeadPhoneForStorage } from '@/lib/phone'
-import { employeeAssignUpdate, employeeUnassignUpdate } from '@/lib/lead-assignment'
+import {
+  employeeAssignUpdate,
+  employeeUnassignUpdate,
+  FRESH_UNASSIGNED_DISPOSITION,
+  normalizeUnassignedLeadDispositions,
+  unassignedEmployeeWhere,
+} from '@/lib/lead-assignment'
 import { getJwtSecret } from '@/lib/jwt-secret'
 import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
 import {
@@ -116,6 +122,13 @@ function parsePositiveInt(value: string | null, fallback: number, max?: number):
   return n
 }
 
+/** Legacy leads uploaded before import batches — importId missing or explicitly null. */
+function legacyImportWhere(): Prisma.LeadWhereInput {
+  return {
+    OR: [{ importId: null }, { importId: { isSet: false } }],
+  }
+}
+
 function buildAdminLeadWhere(opts: {
   search?: string
   disposition?: string
@@ -140,6 +153,10 @@ function buildAdminLeadWhere(opts: {
     and.push({ assignedToId: opts.assignedToId })
   } else if (opts.unassignedOnly) {
     and.push(unassignedEmployeeWhere())
+    // Assignable pool = no employee + New (legacy rows with other dispositions are excluded unless disposition filter set)
+    if (!opts.disposition || opts.disposition === 'All') {
+      and.push({ disposition: FRESH_UNASSIGNED_DISPOSITION })
+    }
   }
 
   if (opts.ids?.length) {
@@ -150,20 +167,6 @@ function buildAdminLeadWhere(opts: {
   if (searchFilter) and.push(searchFilter)
 
   return and.length ? { AND: and } : {}
-}
-
-/** Legacy leads uploaded before import batches — importId missing or explicitly null. */
-function legacyImportWhere(): Prisma.LeadWhereInput {
-  return {
-    OR: [{ importId: null }, { importId: { isSet: false } }],
-  }
-}
-
-/** Leads with no employee owner (null or field absent). Do not use '' — invalid for @db.ObjectId. */
-function unassignedEmployeeWhere(): Prisma.LeadWhereInput {
-  return {
-    OR: [{ assignedToId: null }, { assignedToId: { isSet: false } }],
-  }
 }
 
 type AdminLeadListFindArgs = {
@@ -245,6 +248,18 @@ export async function GET(req: NextRequest) {
     const ids = uniqStrings(searchParams.get('ids')?.split(',') ?? [])
 
     const mode = countOnly ? 'countOnly' : idsOnly ? 'idsOnly' : 'list'
+
+    if (unassignedOnly || searchParams.get('repairUnassigned') === 'true') {
+      const repaired = await normalizeUnassignedLeadDispositions(db)
+      if (repaired.count > 0) {
+        invalidateCountCache()
+        invalidateAdminDashboardCache()
+        void refreshDashboardStatsAfterLeadMutation()
+        console.log(
+          `[${LOG_SCOPE}] normalized ${repaired.count} unassigned lead(s) to disposition New`
+        )
+      }
+    }
 
     const where = buildAdminLeadWhere({
       search,

@@ -101,6 +101,8 @@ export default function AdminLeadsPage() {
   const [importsLoading, setImportsLoading] = useState(true)
   const [batchActionLoading, setBatchActionLoading] = useState(false)
   const importFilterInitializedRef = useRef(false)
+  const normalizedUnassignedRef = useRef(false)
+  const [leadsInitReady, setLeadsInitReady] = useState(false)
   const [commonQty, setCommonQty] = useState<number | ''>('')
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'warn' } | null>(null)
   
@@ -467,13 +469,35 @@ export default function AdminLeadsPage() {
   }, [])
 
   useEffect(() => {
-    void fetchEmployees()
-    void fetchLeadImports()
+    void (async () => {
+      await Promise.all([fetchEmployees(), fetchLeadImports()])
+      if (!normalizedUnassignedRef.current) {
+        normalizedUnassignedRef.current = true
+        try {
+          const res = await fetch('/api/admin/leads/normalize-unassigned', {
+            method: 'POST',
+            credentials: 'include',
+          })
+          const data = await res.json().catch(() => ({}))
+          if (res.ok && typeof data.repairedCount === 'number' && data.repairedCount > 0) {
+            setTotalLeads(null)
+            setNotification({
+              message: `Repaired ${data.repairedCount} unassigned lead(s) — disposition set to New`,
+              type: 'success',
+            })
+          }
+        } catch {
+          /* non-blocking repair */
+        }
+      }
+      setLeadsInitReady(true)
+    })()
   }, [fetchEmployees, fetchLeadImports])
 
   useEffect(() => {
+    if (!leadsInitReady) return
     void fetchLeads()
-  }, [fetchLeads])
+  }, [fetchLeads, leadsInitReady])
 
   useVisibilityPolling(
     () => {
@@ -505,7 +529,7 @@ export default function AdminLeadsPage() {
   }, [displaySearchTerm, deselectAll])
 
   const activeEmployeeFilterLabel = useMemo(() => {
-    if (filterEmployeeId === 'unassigned') return 'Unassigned only'
+    if (filterEmployeeId === 'unassigned') return 'Unassigned (New only)'
     if (filterEmployeeId) {
       return employees.find((e) => e.id === filterEmployeeId)?.name ?? 'Selected employee'
     }
@@ -1251,7 +1275,7 @@ export default function AdminLeadsPage() {
                   className="w-full bg-neutral-900 border border-neutral-800 text-white rounded-lg pl-10 pr-4 py-2 text-sm appearance-none transition-all"
                 >
                   <option value="">All employees</option>
-                  <option value="unassigned">Unassigned only</option>
+                  <option value="unassigned">Unassigned (New only)</option>
                   {employees.map((emp) => (
                     <option key={emp.id} value={emp.id}>
                       {emp.name}
