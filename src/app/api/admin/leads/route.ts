@@ -598,7 +598,7 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid employee selection' }, { status: 400 })
     }
 
-    // Assign or transfer — overwrites any previous assignedToId.
+    // Assign or transfer — new owner + reset prior employee CRM work (disposition, intake, etc.).
     const updated = await db.lead.updateMany({
       where: { id: { in: normalizedLeadIds } },
       data: employeeAssignUpdate(employee.id),
