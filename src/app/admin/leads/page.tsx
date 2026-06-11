@@ -163,15 +163,25 @@ export default function AdminLeadsPage() {
     [currentPage, pageSize, searchTerm, filterDisposition, filterEmployeeId, filterImportId, showSelectedOnly]
   )
 
+  const fetchLegacyLeadCount = useCallback(async () => {
+    const params = new URLSearchParams({ countOnly: 'true', importId: 'none' })
+    const res = await fetch(`/api/admin/leads?${params.toString()}`, {
+      cache: 'no-store',
+      credentials: 'include',
+    })
+    const data = await res.json().catch(() => ({}))
+    return res.ok && typeof data.total === 'number' ? data.total : null
+  }, [])
+
   const pickDefaultImportFilter = useCallback(
     (imports: LeadImportBatch[], legacyCount: number, current: string) => {
-      if (current === 'none' && legacyCount > 0) return 'none'
+      if (current === 'none') return 'none'
       if (current && current !== 'none' && imports.some((i) => i.id === current)) {
         return current
       }
       if (legacyCount > 0) return 'none'
       if (imports.length > 0) return imports[0].id
-      return ''
+      return 'none'
     },
     []
   )
@@ -185,26 +195,45 @@ export default function AdminLeadsPage() {
           credentials: 'include',
         })
         const data = await res.json().catch(() => ({}))
-        if (res.ok && Array.isArray(data.imports)) {
-          const imports = data.imports as LeadImportBatch[]
-          const legacyCount =
-            typeof data.legacyCount === 'number' ? data.legacyCount : 0
-          setLeadImports(imports)
-          setLegacyImportCount(legacyCount)
 
-          if (opts?.reconcileFilter || !importFilterInitializedRef.current) {
-            setFilterImportId((prev) => {
-              const next = pickDefaultImportFilter(imports, legacyCount, prev)
-              if (next) importFilterInitializedRef.current = true
-              return next
+        let imports: LeadImportBatch[] = Array.isArray(data.imports)
+          ? (data.imports as LeadImportBatch[])
+          : []
+        let legacyCount =
+          typeof data.legacyCount === 'number' ? data.legacyCount : 0
+
+        if (!res.ok || legacyCount === 0) {
+          const fallbackCount = await fetchLegacyLeadCount()
+          if (fallbackCount != null) legacyCount = fallbackCount
+        }
+
+        if (res.ok && Array.isArray(data.imports)) {
+          setLeadImports(imports)
+        } else {
+          setLeadImports(imports)
+          if (data.importsReady === false) {
+            setNotification({
+              message:
+                'New upload batches need a one-time DB update. Existing leads still work — run: npx prisma generate && npx prisma db push',
+              type: 'warn',
             })
           }
+        }
+
+        setLegacyImportCount(legacyCount)
+
+        if (opts?.reconcileFilter || !importFilterInitializedRef.current) {
+          setFilterImportId((prev) => {
+            const next = pickDefaultImportFilter(imports, legacyCount, prev)
+            importFilterInitializedRef.current = true
+            return next
+          })
         }
       } finally {
         setImportsLoading(false)
       }
     },
-    [pickDefaultImportFilter]
+    [fetchLegacyLeadCount, pickDefaultImportFilter]
   )
 
   const selectedImportBatch = useMemo(
@@ -1015,16 +1044,14 @@ export default function AdminLeadsPage() {
                   disabled={importsLoading && !filterImportId}
                   className="w-full bg-neutral-900 border border-blue-500/30 text-white rounded-lg pl-10 pr-4 py-2.5 text-sm appearance-none transition-all normal-case font-medium disabled:opacity-60"
                 >
-                  {!filterImportId && (
-                    <option value="">
-                      {importsLoading ? 'Loading import files…' : 'No import files yet'}
-                    </option>
-                  )}
-                  {legacyImportCount > 0 && (
-                    <option value="none">
-                      Existing leads ({legacyImportCount.toLocaleString()} leads)
-                    </option>
-                  )}
+                  <option value="none">
+                    Existing leads
+                    {importsLoading
+                      ? ' (loading…)'
+                      : legacyImportCount > 0
+                        ? ` (${legacyImportCount.toLocaleString()} leads)`
+                        : ''}
+                  </option>
                   {leadImports.map((imp) => (
                     <option key={imp.id} value={imp.id}>
                       {imp.fileName} ({imp.leadCount.toLocaleString()} leads ·{' '}
