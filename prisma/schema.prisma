@@ -134,6 +134,26 @@ model LeadImport {
   @@index([createdAt(sort: Desc)])
 }
 
+/// One admin assign / transfer / unassign action (aggregated — not per lead).
+model LeadAssignmentBatch {
+  id                 String   @id @default(auto()) @map("_id") @db.ObjectId
+  /// ASSIGN | TRANSFER | UNASSIGN
+  action             String
+  leadCount          Int
+  /// Target employee for ASSIGN / TRANSFER
+  employeeId         String?  @db.ObjectId
+  /// Source employee for TRANSFER, or uniform source for UNASSIGN when all leads shared one owner
+  previousEmployeeId String?  @db.ObjectId
+  /// Import batch when all leads in the action shared the same importId
+  importId           String?  @db.ObjectId
+  performedById      String   @db.ObjectId
+  createdAt          DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([employeeId, createdAt(sort: Desc)])
+  @@index([performedById, createdAt(sort: Desc)])
+}
+
 model LeadDocument {
   id           String   @id @default(auto()) @map("_id") @db.ObjectId
   leadId       String   @db.ObjectId

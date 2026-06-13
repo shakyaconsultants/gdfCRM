@@ -7,6 +7,12 @@ function isFormFieldTarget(target: EventTarget | null): boolean {
   return !!target.closest('input, textarea, select, [contenteditable="true"]')
 }
 
+function isCopyAllowedTarget(target: EventTarget | null): boolean {
+  if (isFormFieldTarget(target)) return true
+  if (!target || !(target instanceof Element)) return false
+  return !!target.closest('[data-allow-copy], .select-text')
+}
+
 /**
  * Discourages copying page content (e.g. lead PII). Selection and clipboard still work inside form controls.
  * Note: Determined users can bypass browser-only restrictions (DevTools, extensions, screenshots).
@@ -14,7 +20,7 @@ function isFormFieldTarget(target: EventTarget | null): boolean {
 export function useRestrictCopy() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (isFormFieldTarget(e.target)) return
+      if (isCopyAllowedTarget(e.target)) return
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const k = e.key.toLowerCase()
@@ -24,7 +30,7 @@ export function useRestrictCopy() {
     }
 
     const onClipboard = (e: Event) => {
-      if (isFormFieldTarget(e.target)) return
+      if (isCopyAllowedTarget(e.target)) return
       e.preventDefault()
     }
 
@@ -40,17 +46,17 @@ export function useRestrictCopy() {
   }, [])
 
   const onCopy = useCallback((e: ClipboardEvent<HTMLElement>) => {
-    if (isFormFieldTarget(e.target)) return
+    if (isCopyAllowedTarget(e.target)) return
     e.preventDefault()
   }, [])
 
   const onCut = useCallback((e: ClipboardEvent<HTMLElement>) => {
-    if (isFormFieldTarget(e.target)) return
+    if (isCopyAllowedTarget(e.target)) return
     e.preventDefault()
   }, [])
 
   const onContextMenu = useCallback((e: MouseEvent<HTMLElement>) => {
-    if (isFormFieldTarget(e.target)) return
+    if (isCopyAllowedTarget(e.target)) return
     e.preventDefault()
   }, [])
 

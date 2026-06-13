@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useSearchParams } from 'next/navigation'
 import Navigation from '@/components/Navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -79,6 +80,7 @@ const FILTER_DISPOSITIONS = ['All', ...LEAD_DISPOSITIONS]
 const EDIT_DISPOSITIONS = LEAD_DISPOSITIONS
 
 export default function AdminLeadsPage() {
+  const searchParams = useSearchParams()
   const [leads, setLeads] = useState<Lead[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
   const [selectedLeads, setSelectedLeads] = useState<Set<string>>(new Set())
@@ -102,6 +104,7 @@ export default function AdminLeadsPage() {
   const [batchActionLoading, setBatchActionLoading] = useState(false)
   const importFilterInitializedRef = useRef(false)
   const normalizedUnassignedRef = useRef(false)
+  const employeeFilterFromUrlRef = useRef(false)
   const [leadsInitReady, setLeadsInitReady] = useState(false)
   const [commonQty, setCommonQty] = useState<number | ''>('')
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'warn' } | null>(null)
@@ -467,6 +470,18 @@ export default function AdminLeadsPage() {
       /* employees list is non-blocking */
     }
   }, [])
+
+  useEffect(() => {
+    if (employeeFilterFromUrlRef.current) return
+    const fromUrl =
+      searchParams.get('employee')?.trim() ||
+      searchParams.get('assignedToId')?.trim() ||
+      ''
+    if (fromUrl) {
+      setFilterEmployeeId(fromUrl)
+      employeeFilterFromUrlRef.current = true
+    }
+  }, [searchParams])
 
   useEffect(() => {
     void (async () => {

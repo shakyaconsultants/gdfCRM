@@ -81,8 +81,8 @@ export default function EmployeeCrmPanel() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterDisposition, setFilterDisposition] = useState('All')
   const lastSyncRef = useRef<string | null>(null)
-  const totalLeadsRef = useRef(0)
-  totalLeadsRef.current = totalLeads
+  const pausePollRef = useRef(false)
+  const interactionUntilRef = useRef(0)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   
@@ -97,6 +97,17 @@ export default function EmployeeCrmPanel() {
   const intakeModalOpenRef = useRef(false)
   intakeModalOpenRef.current = !!expandedId
   const restrictCopy = useRestrictCopy()
+
+  const bumpInteractionPause = useCallback((ms = 90_000) => {
+    interactionUntilRef.current = Date.now() + ms
+  }, [])
+
+  const isPollPaused = useCallback(() => {
+    if (pausePollRef.current) return true
+    if (intakeModalOpenRef.current) return true
+    if (Date.now() < interactionUntilRef.current) return true
+    return false
+  }, [])
 
   const openIntakeModal = async (lead: Lead) => {
     setExpandedId(lead.id)
@@ -178,7 +189,9 @@ export default function EmployeeCrmPanel() {
 
   const fetchLeads = useCallback(
     async (opts?: { silent?: boolean; poll?: boolean }) => {
-      if (opts?.poll && intakeModalOpenRef.current) return
+      if (opts?.poll) {
+        if (isPollPaused() || !lastSyncRef.current) return
+      }
       if (!opts?.silent && !opts?.poll) setLoading(true)
       try {
         const qs = buildLeadsQuery(
@@ -189,17 +202,8 @@ export default function EmployeeCrmPanel() {
           opts?.poll ? Promise.resolve(null) : fetch('/api/employee/advisors', { cache: 'no-store' }),
         ])
         const leadsData = await leadsRes.json()
-        if (opts?.poll && lastSyncRef.current) {
-          if (typeof leadsData.total === 'number') {
-            const prevTotal = totalLeadsRef.current
-            setTotalLeads(leadsData.total)
-            if (leadsData.total !== prevTotal) {
-              if (leadsData.stats) setKpiStats(leadsData.stats)
-              if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
-              await fetchLeads({ silent: true })
-              return
-            }
-          }
+        if (opts?.poll) {
+          if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
           if (leadsData.stats) setKpiStats(leadsData.stats)
           if (Array.isArray(leadsData.deltas) && leadsData.deltas.length > 0) {
             const skipIds = saveQueueRef.current.pendingLeadIds()
@@ -221,7 +225,7 @@ export default function EmployeeCrmPanel() {
         if (!opts?.silent && !opts?.poll) setLoading(false)
       }
     },
-    [buildLeadsQuery]
+    [buildLeadsQuery, isPollPaused]
   )
 
   useEffect(() => {
@@ -231,7 +235,7 @@ export default function EmployeeCrmPanel() {
   useVisibilityPolling(
     () => fetchLeads({ silent: true, poll: true }),
     [fetchLeads],
-    { intervalMs: 120_000 }
+    { intervalMs: 120_000, runOnMount: false }
   )
 
   // Debounce search term update
@@ -464,7 +468,11 @@ export default function EmployeeCrmPanel() {
             <span>{totalLeads} lead{totalLeads === 1 ? '' : 's'} · scroll horizontally for all columns</span>
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400" aria-hidden />}
           </div>
-          <div className="flex-1 min-h-0 overflow-auto overscroll-x-contain">
+          <div
+            className="flex-1 min-h-0 overflow-auto overscroll-x-contain"
+            onMouseDown={() => bumpInteractionPause()}
+            onFocusCapture={() => bumpInteractionPause()}
+          >
             <table className="min-w-max w-full text-left border-collapse text-sm">
               <thead className="sticky top-0 z-10 shadow-[0_1px_0_0_rgb(38,38,38)]">
                 <tr className="border-b border-neutral-800 bg-neutral-900 text-[10px] uppercase tracking-wider text-neutral-400">
@@ -529,7 +537,13 @@ export default function EmployeeCrmPanel() {
                       <td className="p-3 text-neutral-400 min-w-[10rem] max-w-[18rem] whitespace-normal break-words align-top select-text" title={lead.address || ''}>{lead.address || '—'}</td>
                       <td className="p-3 text-neutral-400 whitespace-nowrap">{lead.postCode || '—'}</td>
                       <td className="p-3 font-mono text-neutral-300 whitespace-nowrap">
-                        <a href={`tel:${lead.phone}`} className="hover:text-blue-400 underline decoration-neutral-700 underline-offset-4 select-text">{lead.phone}</a>
+                        <a
+                          href={`tel:${lead.phone}`}
+                          className="hover:text-blue-400 underline decoration-neutral-700 underline-offset-4 select-text"
+                          onMouseDown={() => bumpInteractionPause(120_000)}
+                        >
+                          {lead.phone}
+                        </a>
                       </td>
                       <td className="p-3 text-neutral-300 normal-case max-w-[14rem] truncate select-text" title={lead.email || ''}>{lead.email || '—'}</td>
                       <td className="p-3 align-top">

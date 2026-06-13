@@ -11,6 +11,11 @@ import {
   normalizeUnassignedLeadDispositions,
   unassignedEmployeeWhere,
 } from '@/lib/lead-assignment'
+import {
+  classifyAssignmentBatch,
+  inferSharedImportId,
+  recordLeadAssignmentBatch,
+} from '@/lib/lead-assignment-batch'
 import { getJwtSecret } from '@/lib/jwt-secret'
 import { ADMIN_LEADS_PAGE_SIZE } from '@/lib/admin-leads-config'
 import {
@@ -565,6 +570,13 @@ export async function PUT(req: NextRequest) {
       assignedToId === null ||
       (typeof assignedToId === 'string' && assignedToId.trim() === '')
 
+    const ownershipRows = await db.lead.findMany({
+      where: { id: { in: normalizedLeadIds } },
+      select: { assignedToId: true, importId: true },
+    })
+    const performedById = typeof payload.id === 'string' ? payload.id : null
+    const sharedImportId = inferSharedImportId(ownershipRows)
+
     if (shouldUnassign) {
       const updated = await db.lead.updateMany({
         where: { id: { in: normalizedLeadIds } },
@@ -585,6 +597,17 @@ export async function PUT(req: NextRequest) {
           },
           { status: 500 }
         )
+      }
+
+      if (performedById) {
+        const batchMeta = classifyAssignmentBatch(ownershipRows, null, true)
+        void recordLeadAssignmentBatch(db, {
+          action: batchMeta.action,
+          leadCount: updated.count,
+          previousEmployeeId: batchMeta.previousEmployeeId,
+          importId: sharedImportId,
+          performedById,
+        })
       }
 
       return NextResponse.json({
@@ -633,6 +656,18 @@ export async function PUT(req: NextRequest) {
         },
         { status: 500 }
       )
+    }
+
+    if (performedById) {
+      const batchMeta = classifyAssignmentBatch(ownershipRows, employee.id, false)
+      void recordLeadAssignmentBatch(db, {
+        action: batchMeta.action,
+        leadCount: updated.count,
+        employeeId: batchMeta.employeeId,
+        previousEmployeeId: batchMeta.previousEmployeeId,
+        importId: sharedImportId,
+        performedById,
+      })
     }
 
     return NextResponse.json({

@@ -9,6 +9,7 @@ import { USER_CACHE_KEY, clearUserSessionCache } from '@/lib/auth-session'
 const ADMIN_NAV_LINKS = [
   { href: '/admin', label: 'Dashboard', exact: true },
   { href: '/admin/leads', label: 'Leads' },
+  { href: '/admin/assignments', label: 'Assignments' },
   { href: '/admin/employees', label: 'Teams' },
   { href: '/admin/payroll', label: 'Payroll' },
   { href: '/admin/leave-requests', label: 'Leave' },
