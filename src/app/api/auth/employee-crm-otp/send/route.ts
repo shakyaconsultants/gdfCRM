@@ -5,7 +5,7 @@ import { randomInt } from 'crypto'
 import { db } from '@/lib/db'
 import { authenticateEmployeeJwt } from '@/lib/enforce-employee-auth'
 import { employeeHasCrmAccess } from '@/lib/employee-jwt'
-import { isGlobalOtpEnabled } from '@/lib/otp-config'
+import { isGlobalOtpEnabled, isOtpBypassAllowed } from '@/lib/otp-config'
 import { sendEmployeeCrmUnlockOtp } from '@/lib/crm-mail'
 import {
   setCrmSessionCookie,
@@ -17,9 +17,11 @@ const CRM_PENDING = 'pending_employee_crm'
 export async function POST(req: NextRequest) {
   const auth = await authenticateEmployeeJwt(req)
   if (!auth.ok) return auth.response
+
+  try {
   const ip = getClientIp(req)
 
-  const ipLimit = checkRateLimit({
+  const ipLimit = await checkRateLimit({
     key: `otp:employee-send:ip:${ip}`,
     limit: 12,
     windowMs: 10 * 60 * 1000,
@@ -31,7 +33,7 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  const userLimit = checkRateLimit({
+  const userLimit = await checkRateLimit({
     key: `otp:employee-send:user:${auth.userId}`,
     limit: 6,
     windowMs: 10 * 60 * 1000,
@@ -44,6 +46,16 @@ export async function POST(req: NextRequest) {
   }
 
   if (!isGlobalOtpEnabled()) {
+    // Audit SEC-2: never hand out a CRM session without OTP in production.
+    if (!isOtpBypassAllowed()) {
+      console.error(
+        '[employee-crm-otp/send] ADMIN_EMAIL not configured in production; CRM second factor cannot be issued.'
+      )
+      return NextResponse.json(
+        { error: 'CRM verification is not configured on the server. Please contact your administrator.' },
+        { status: 503 }
+      )
+    }
     const user = await db.user.findUnique({
       where: { id: auth.userId },
       select: { id: true, email: true },
@@ -120,4 +132,8 @@ export async function POST(req: NextRequest) {
     maxAge: 60 * 10,
   })
   return response
+  } catch (error) {
+    console.error('[auth/employee-crm-otp/send]', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
 }

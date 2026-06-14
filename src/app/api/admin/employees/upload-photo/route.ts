@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { jwtVerify } from 'jose'
 import cloudinary, { isCloudinaryConfigured } from '@/lib/cloudinary'
+import { getJwtSecret } from '@/lib/jwt-secret'
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
+import { sniffImageMime } from '@/lib/upload-security'
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET)
+const secret = getJwtSecret()
 const ALLOWED_TYPES = /^image\/(jpeg|jpg|png|gif|webp)$/i
 
 export const runtime = 'nodejs'
@@ -16,6 +19,19 @@ export async function POST(req: NextRequest) {
   try {
     const { payload } = await jwtVerify(token, secret)
     if (payload.role !== 'ADMIN') return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+
+    // Audit SEC-8: per-admin upload rate limit.
+    const rl = await checkRateLimit({
+      key: `upload:admin-photo:${typeof payload.id === 'string' ? payload.id : getClientIp(req)}`,
+      limit: 30,
+      windowMs: 10 * 60 * 1000,
+    })
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: 'Too many uploads. Please wait and try again.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      )
+    }
 
     if (!isCloudinaryConfigured()) {
       return NextResponse.json(
@@ -39,6 +55,10 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(bytes)
     if (buffer.length > 4 * 1024 * 1024) {
       return NextResponse.json({ error: 'Image must be at most 4MB.' }, { status: 400 })
+    }
+    // Audit SEC-8: validate magic bytes, not just the client Content-Type.
+    if (!sniffImageMime(buffer)) {
+      return NextResponse.json({ error: 'File is not a valid image.' }, { status: 400 })
     }
 
     const result = await new Promise<{ secure_url: string }>((resolve, reject) => {

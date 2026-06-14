@@ -8,6 +8,7 @@ import { sendLoginOtpToAdmin } from '@/lib/mail'
 import { EMPLOYEE_SESSION_COOKIE_MAX_AGE, EMPLOYEE_SESSION_JWT_EXP } from '@/lib/employee-session'
 import { getJwtSecret } from '@/lib/jwt-secret'
 import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
+import { isOtpBypassAllowed } from '@/lib/otp-config'
 
 const secret = getJwtSecret()
 const PENDING_COOKIE = 'pending_login'
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : ''
     const ip = getClientIp(req)
 
-    const ipLimit = checkRateLimit({
+    const ipLimit = await checkRateLimit({
       key: `login:ip:${ip}`,
       limit: 25,
       windowMs: 10 * 60 * 1000,
@@ -47,7 +48,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing email or password' }, { status: 400 })
     }
 
-    const userLimit = checkRateLimit({
+    const userLimit = await checkRateLimit({
       key: `login:user:${normalizedEmail}`,
       limit: 8,
       windowMs: 10 * 60 * 1000,
@@ -76,6 +77,16 @@ export async function POST(req: NextRequest) {
     const otpEnabled = !!adminEmail
 
     if (!otpEnabled) {
+      // Audit SEC-1: never silently disable OTP in production.
+      if (!isOtpBypassAllowed()) {
+        console.error(
+          '[auth/login] ADMIN_EMAIL is not configured in production. Set ADMIN_EMAIL (and SMTP) or DISABLE_LOGIN_OTP=true to intentionally bypass.'
+        )
+        return NextResponse.json(
+          { error: 'Login is not fully configured on the server. Please contact your administrator.' },
+          { status: 503 }
+        )
+      }
       const claims: Record<string, unknown> = {
         id: user.id,
         email: user.email,

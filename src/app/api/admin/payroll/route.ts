@@ -9,6 +9,7 @@ import {
   weekdayCountInMonth,
 } from '@/lib/payroll-utils'
 import { getJwtSecret } from '@/lib/jwt-secret'
+import { verifiedInMonthFilter } from '@/lib/verified-month'
 
 type PayrollRow = {
   employeeId: string
@@ -41,6 +42,8 @@ export async function GET(req: NextRequest) {
     let month = parseInt(searchParams.get('month') || '', 10)
     if (!Number.isFinite(year)) year = now.getFullYear()
     if (!Number.isFinite(month)) month = now.getMonth() + 1
+    // Audit LOW-2: clamp to a sane range so absurd inputs can't drive pointless queries.
+    year = Math.min(now.getFullYear() + 1, Math.max(2000, year))
     month = Math.min(12, Math.max(1, month))
 
     const { start, end } = monthBoundsUtc(year, month)
@@ -61,8 +64,8 @@ export async function GET(req: NextRequest) {
             by: ['assignedToId'],
             where: {
               assignedToId: { in: employeeIds },
-              verifiedSale: true,
-              updatedAt: { gte: start, lte: end },
+              // Audit BUG-2: count by verifiedAt (fallback updatedAt) to match the dashboard.
+              ...verifiedInMonthFilter(start, end),
             },
             _count: { _all: true },
           })

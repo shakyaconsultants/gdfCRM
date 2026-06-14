@@ -272,3 +272,51 @@ The employee poll fetches at most 100 changed rows since last sync and merges th
 Core infra (`db.ts`, `proxy.ts`, `rate-limit.ts`, `jwt-secret.ts`, `enforce-employee-auth.ts`), all of `src/app/api/**` (51 routes; 21 deep-read), dashboard/aggregation libs (`build-admin-dashboard-payload.ts`, `dashboard-stats-snapshot.ts`, `admin-aggregations.ts`, `lead-assigned-stats.ts`, `verified-month.ts`), lead libs (`lead-assignment*.ts`, `lead-search-filter.ts`, `lead-sync-client.ts`, `lead-save-queue.ts`, count cache), schema (`prisma/schema.prisma`), and the main frontends (`admin/leads/page.tsx`, `admin/page.tsx`, `components/employee/EmployeeCrmPanel.tsx`, hooks).
 
 > **Note:** Several security findings depend on production env configuration (`ADMIN_EMAIL`, OTP flags, `JWT_SECRET`). Verify the actual Vercel env before assuming a flow is exposed — the code paths exist, but may be disabled by correct env. The fixes above make the safe behavior the *default* rather than env-dependent.
+
+---
+
+## 15. Implementation status (2026-06-14)
+
+All items below were implemented in a **non-breaking** way; existing behavior is preserved.
+
+### Implemented in code
+| ID | What changed |
+|----|--------------|
+| SEC-1 | `isOtpBypassAllowed()` (`src/lib/otp-config.ts`); login fails closed in production when `ADMIN_EMAIL` missing unless `DISABLE_LOGIN_OTP=true`. `employeeHasCrmAccess` no longer unlocks CRM via env gap. |
+| SEC-2 | `employee-crm-otp/send` only auto-issues a CRM session without OTP when bypass is allowed; otherwise 503. |
+| SEC-3 | `crm-access/send` now has a **per-email** rate limit + `try/catch`. |
+| SEC-4 | Employee `DELETE` role-guards `role: 'EMPLOYEE'` and nulls `assignedToId`/`assignedAdvisorId`/`assignedCaseAssessorId` in one transaction. |
+| SEC-5 | `rate-limit.ts` is now async with an **Upstash Redis REST** backend (env-gated `UPSTASH_REDIS_REST_URL`/`_TOKEN`) and in-memory fallback. All auth routes `await` it. |
+| SEC-6 | `getJwtSecret()` used in `admin/employees`, `attendance`, `leave-requests`, `upload-photo`. |
+| SEC-7 | `try/catch` added to all CRM/OTP auth routes + `change-password`. |
+| SEC-8 | Centralized `password-policy.ts` (bcrypt cost **12**, 8–128 length, Cloudinary URL allowlist); magic-byte image sniffing + per-user upload rate limits on all upload routes. |
+| SEC-9 | Allowlist validation for `status` (leave-requests) and `disposition` (employee/leads). |
+| SEC-10 | OTP attempt counters persisted in DB (`LoginOtpSession.attempts`) instead of in-memory maps. |
+| SEC-11 | `admin/upload` returns only `{ secure_url, public_id }`. |
+| PERF-1 | Lead search is now case-insensitive; numeric/phone queries get an anchored prefix term (index-friendly) alongside the `contains` fallback. |
+| PERF-2 | `refreshDashboardStatsAfterLeadMutation` refreshes only `all` + rolling-30d, debounced 30s; other scopes revalidate lazily on read. |
+| PERF-3 | Per-user assigned-stats cached 60s (`countAssignedLeadStatsCached`) for employee + advisor CRM. |
+| PERF-4 | Compound index `@@index([importId, disposition, assignedToId])` added. |
+| PERF-6 | `attendance` returns `total`/`cap`/`truncated` (cap raised to 2000). |
+| PERF-7 / LOW-7 | Dead `/api/admin/metrics` route deleted. |
+| BUG-1 | Empty `LeadImport` deleted when every row was a duplicate; response `importId` is null. |
+| BUG-2 | Payroll verified counting uses `verifiedInMonthFilter`. |
+| ROBUST-1 | `console.error` added to previously-silent catches (leave-requests, attendance, advisor/leads, case-assessor/leads, employee/leads, admin/employees GET). |
+| CRM-1 | Employee poll triggers one silent full refresh when total grows beyond the 100-row delta cap (gated by interaction pause). |
+| CRM flow | Unassigned normalization removed from the hot GET listing path; runs only via explicit repair + the unassign action + dedicated route. |
+| Idempotency | Short server-side dedupe on assign/unassign `PUT`. |
+| LOW-1 | `employeeId` via `crypto.randomBytes`. |
+| LOW-2 | Payroll `year` clamped to `[2000, currentYear+1]`. |
+| LOW-3 | Leaderboard cache TTL shortened to 60s. |
+| LOW-4 | Advisor document upload validates `instanceof Blob`. |
+| LOW-5 | Fake "Pipeline Velocity" panel removed. |
+| LOW-6 | Advisor documents `findMany` capped at 50. |
+| Frontend | Admin dashboard `metrics` typed (no more `any`); employee table name/postcode marked `.select-text`. |
+
+### Requires an operator action (no safe code-only fix)
+- **PERF-4 index / SEC-10 field:** run `npx prisma db push` so MongoDB creates the new compound index and `attempts` field.
+- **SEC-5 / SEC-10 (distributed):** set `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` in the environment to activate cross-instance rate limiting (in-memory fallback works without it).
+- **SEC-1 / SEC-2 prod posture:** ensure `ADMIN_EMAIL` (+ SMTP) is set in production; otherwise set `DISABLE_LOGIN_OTP=true` to intentionally bypass.
+- **PERF-1 (deep):** Atlas Search / `searchTokens` multikey field for name search was **deferred** — it needs an Atlas index definition + a full backfill window and would change phone-substring matching. The shipped insensitive + anchored-phone change is the safe subset.
+- **DATA-1:** tune `maxPoolSize` in `DATABASE_URL` for Vercel concurrency vs Atlas limits.
+- **PERF-5:** leaderboard/monthly-stars already cached; employee-list queries are bounded by the (small) employee count — left as-is to keep ranking correct.

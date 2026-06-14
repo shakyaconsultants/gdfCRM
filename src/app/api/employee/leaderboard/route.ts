@@ -4,9 +4,6 @@ import { db } from '@/lib/db'
 import { enforceEmployeeHub } from '@/lib/enforce-employee-auth'
 import { startOfMonth, endOfMonth } from 'date-fns'
 import { verifiedCountsByEmployee } from '@/lib/verified-counts-batch'
-import type { EmployeeVerifiedRow } from '@/lib/verified-month'
-
-type LeaderboardRow = EmployeeVerifiedRow & { rank: number }
 
 export async function GET(req: NextRequest) {
   const gated = await enforceEmployeeHub(req)
@@ -43,7 +40,8 @@ export async function GET(req: NextRequest) {
       month: monthStart.toISOString(),
       usingFallback: false,
     })
-    response.headers.set('Cache-Control', 'private, max-age=120')
+    // Audit LOW-3: short TTL so mid-month rank changes surface quickly.
+    response.headers.set('Cache-Control', 'private, max-age=60')
     return response
   } catch (err) {
     console.error('[leaderboard]', err)

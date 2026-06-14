@@ -3,6 +3,8 @@ import type { NextRequest } from 'next/server'
 import cloudinary, { isCloudinaryConfigured } from '@/lib/cloudinary'
 import { db } from '@/lib/db'
 import { enforceEmployeeHub } from '@/lib/enforce-employee-auth'
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
+import { sniffImageMime } from '@/lib/upload-security'
 
 const ALLOWED_TYPES = /^image\/(jpeg|jpg|png|gif|webp)$/i
 
@@ -15,6 +17,19 @@ export async function POST(req: NextRequest) {
   const userId = gated.userId
 
   try {
+    // Audit SEC-8: per-user upload rate limit.
+    const rl = await checkRateLimit({
+      key: `upload:profile-image:${userId}:${getClientIp(req)}`,
+      limit: 10,
+      windowMs: 10 * 60 * 1000,
+    })
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: 'Too many uploads. Please wait and try again.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      )
+    }
+
     if (!isCloudinaryConfigured()) {
       return NextResponse.json(
         { error: 'File storage is not configured. Set CLOUDINARY_* in your environment.' },
@@ -38,6 +53,10 @@ export async function POST(req: NextRequest) {
     const maxBytes = 4 * 1024 * 1024
     if (buffer.length > maxBytes) {
       return NextResponse.json({ error: 'Image must be at most 4MB.' }, { status: 400 })
+    }
+    // Audit SEC-8: validate magic bytes, not just the client Content-Type.
+    if (!sniffImageMime(buffer)) {
+      return NextResponse.json({ error: 'File is not a valid image.' }, { status: 400 })
     }
 
     const result = await new Promise<{ secure_url: string }>((resolve, reject) => {

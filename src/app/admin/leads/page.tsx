@@ -133,7 +133,9 @@ export default function AdminLeadsPage() {
   const pausePollRef = useRef(false)
   const leadsReadyRef = useRef(false)
   const selectedLeadsRef = useRef(selectedLeads)
-  selectedLeadsRef.current = selectedLeads
+  useEffect(() => {
+    selectedLeadsRef.current = selectedLeads
+  }, [selectedLeads])
 
   const selectedIdsKey = showSelectedOnly
     ? Array.from(selectedLeads).sort().join(',')
@@ -204,7 +206,7 @@ export default function AdminLeadsPage() {
         })
         const data = await res.json().catch(() => ({}))
 
-        let imports: LeadImportBatch[] = Array.isArray(data.imports)
+        const imports: LeadImportBatch[] = Array.isArray(data.imports)
           ? (data.imports as LeadImportBatch[])
           : []
         let legacyCount =

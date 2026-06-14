@@ -41,8 +41,37 @@ type CaseAssessorPerformanceRow = {
   payments: number
 }
 
+type LeaderboardRow = {
+  name: string
+  droppedCount: number
+  verifiedCount: number
+  clawbackCount: number
+}
+
+type RecentActivityRow = {
+  id: string
+  firstName?: string | null
+  lastName?: string | null
+  disposition?: string | null
+  updatedAt: string
+  assignedTo?: { name?: string | null } | null
+}
+
+type DashboardMetrics = {
+  totalLeads: number
+  moveCount: number
+  droppedCount: number
+  verifiedCount: number
+  clawbackCount: number
+  paymentCount: number
+  totalCalls: number
+  recentActivity: RecentActivityRow[]
+  leaderboard: LeaderboardRow[]
+  range: { from: string; to: string } | null
+}
+
 export default function AdminDashboard() {
-  const [metrics, setMetrics] = useState<any>(null)
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null)
   const [advisorPerformance, setAdvisorPerformance] = useState<AdvisorPerformanceRow[] | null>(null)
   const [assessorPerformance, setAssessorPerformance] = useState<CaseAssessorPerformanceRow[] | null>(
     null
@@ -51,8 +80,8 @@ export default function AdminDashboard() {
   const [dateFrom, setDateFrom] = useState(() => format(subDays(new Date(), 30), 'yyyy-MM-dd'))
   const [dateTo, setDateTo] = useState(() => format(new Date(), 'yyyy-MM-dd'))
 
-  const loadMetrics = useCallback(async () => {
-    setLoading(true)
+  const loadMetrics = useCallback(async (opts?: { showSpinner?: boolean }) => {
+    if (opts?.showSpinner) setLoading(true)
     try {
       const qs = dateFrom && dateTo ? `?from=${dateFrom}&to=${dateTo}` : ''
       const res = await fetch(`/api/admin/dashboard${qs}`)
@@ -66,7 +95,9 @@ export default function AdminDashboard() {
   }, [dateFrom, dateTo])
 
   useEffect(() => {
-    loadMetrics()
+    // `loading` starts true, so no synchronous setState is needed here; the spinner is
+    // already shown and is cleared in loadMetrics' finally block.
+    void loadMetrics()
   }, [loadMetrics])
 
   const stats = [
@@ -275,7 +306,7 @@ export default function AdminDashboard() {
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-neutral-800/50">
-                            {metrics?.leaderboard?.map((emp: any, idx: number) => {
+                            {metrics?.leaderboard?.map((emp: LeaderboardRow, idx: number) => {
                                return (
                                  <tr key={emp.name} className="hover:bg-neutral-800/30 transition-colors">
                                    <td className="p-4 pl-6 text-2xl font-black text-neutral-700 italic">#{idx + 1}</td>
@@ -295,19 +326,6 @@ export default function AdminDashboard() {
                </div>
             </div>
 
-            {/* Performance Analysis Graph Placeholder */}
-             <div className="bg-gradient-to-br from-indigo-900/20 to-blue-900/10 border border-indigo-500/20 rounded-2xl p-8 flex items-center justify-between">
-                <div>
-                   <h3 className="text-xl font-bold text-indigo-300">Pipeline Velocity</h3>
-                   <p className="text-indigo-200/60 text-sm mt-1 max-w-sm">Global closure rates are outperforming last quarter expectations across the active workforce.</p>
-                </div>
-                <div className="hidden sm:flex items-end gap-2 h-24">
-                   <div className="w-8 bg-indigo-500/40 rounded-t-sm h-1/4"></div>
-                   <div className="w-8 bg-indigo-500/60 rounded-t-sm h-2/4"></div>
-                   <div className="w-8 bg-indigo-500/80 rounded-t-sm h-3/4"></div>
-                   <div className="w-8 bg-indigo-400 rounded-t-sm h-full shadow-[0_0_15px_rgba(129,140,248,0.5)]"></div>
-                </div>
-             </div>
           </div>
 
           {/* Right Panel: Live Activity Feed */}
@@ -328,7 +346,7 @@ export default function AdminDashboard() {
                     <div className="text-center text-neutral-500 py-10">No recent activity detected.</div>
                  ) : (
                     <div className="space-y-6 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-neutral-800 before:to-transparent">
-                      {metrics?.recentActivity?.map((lead: any) => (
+                      {metrics?.recentActivity?.map((lead: RecentActivityRow) => (
                          <div key={lead.id} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
                              <div className="flex items-center justify-center w-10 h-10 rounded-full border-4 border-neutral-900 bg-neutral-800 text-neutral-500 shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
                                <TrendingUp className="w-4 h-4 text-emerald-500" />

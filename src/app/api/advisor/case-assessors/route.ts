@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ assessors })
   } catch (error) {
+    console.error('[advisor/case-assessors GET]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }

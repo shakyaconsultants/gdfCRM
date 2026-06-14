@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 type Options = {
   /** Poll interval when tab is visible (ms). Default 120_000 */
@@ -21,7 +21,11 @@ export function useVisibilityPolling(
 ) {
   const { intervalMs = 120_000, runOnMount = true, enabled = true } = options
   const cbRef = useRef(callback)
-  cbRef.current = callback
+  // Keep the latest callback without re-running the polling effect. Updated in a layout
+  // effect (not during render) so it's set before any paint-driven timer fires.
+  useLayoutEffect(() => {
+    cbRef.current = callback
+  })
 
   useEffect(() => {
     if (!enabled) return

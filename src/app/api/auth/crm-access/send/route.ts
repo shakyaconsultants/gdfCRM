@@ -13,9 +13,10 @@ void getJwtSecret()
 const CRM_DIRECT_PENDING = 'pending_crm_direct'
 
 export async function POST(req: NextRequest) {
+  try {
   const ip = getClientIp(req)
 
-  const ipLimit = checkRateLimit({
+  const ipLimit = await checkRateLimit({
     key: `otp:crm-direct-send:ip:${ip}`,
     limit: 10,
     windowMs: 10 * 60 * 1000,
@@ -31,6 +32,22 @@ export async function POST(req: NextRequest) {
   const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
   if (!email) {
     return NextResponse.json({ error: 'Email is required.' }, { status: 400 })
+  }
+
+  // Audit SEC-3: per-email limit to stop inbox bombing / enumeration via rotating IPs.
+  const emailLimit = await checkRateLimit({
+    key: `otp:crm-direct-send:email:${email}`,
+    limit: 4,
+    windowMs: 15 * 60 * 1000,
+  })
+  if (!emailLimit.allowed) {
+    return NextResponse.json(
+      {
+        success: true,
+        message: 'If that email belongs to an employee, a code has been sent to the admin inbox.',
+      },
+      { headers: { 'Retry-After': String(emailLimit.retryAfterSec) } }
+    )
   }
 
   const user = await db.user.findUnique({ where: { email } })
@@ -84,4 +101,8 @@ export async function POST(req: NextRequest) {
     maxAge: 60 * 10,
   })
   return response
+  } catch (error) {
+    console.error('[auth/crm-access/send]', error)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
 }

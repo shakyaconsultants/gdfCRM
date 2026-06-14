@@ -11,13 +11,12 @@ const secret = getJwtSecret()
 
 const PENDING_COOKIE = 'pending_login'
 const OTP_MAX_ATTEMPTS = 5
-const otpFailures = new Map<string, number>()
 
 export async function POST(req: NextRequest) {
   try {
     const sessionId = req.cookies.get(PENDING_COOKIE)?.value
     const ip = getClientIp(req)
-    const rl = checkRateLimit({
+    const rl = await checkRateLimit({
       key: `otp:login:ip:${ip}`,
       limit: 20,
       windowMs: 10 * 60 * 1000,
@@ -66,11 +65,17 @@ export async function POST(req: NextRequest) {
 
     const ok = await bcrypt.compare(normalized, session.codeHash)
     if (!ok) {
-      const failCount = (otpFailures.get(sessionId) ?? 0) + 1
-      otpFailures.set(sessionId, failCount)
+      // Audit SEC-10: persist attempt count in DB so it survives instance recycling.
+      const updated = await db.loginOtpSession
+        .update({
+          where: { id: sessionId },
+          data: { attempts: { increment: 1 } },
+          select: { attempts: true },
+        })
+        .catch(() => null)
+      const failCount = updated?.attempts ?? OTP_MAX_ATTEMPTS
       if (failCount >= OTP_MAX_ATTEMPTS) {
         await db.loginOtpSession.delete({ where: { id: sessionId } }).catch(() => {})
-        otpFailures.delete(sessionId)
         const res = NextResponse.json(
           { error: 'Too many invalid attempts. Please sign in again.' },
           { status: 429 }
@@ -81,7 +86,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid code' }, { status: 401 })
     }
 
-    otpFailures.delete(sessionId)
     const user = await db.user.findUnique({ where: { id: session.userId } })
     if (!user) {
       await db.loginOtpSession.delete({ where: { id: sessionId } }).catch(() => {})

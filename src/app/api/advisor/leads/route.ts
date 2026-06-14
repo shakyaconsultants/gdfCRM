@@ -3,7 +3,7 @@ import type { NextRequest } from 'next/server'
 import { jwtVerify } from 'jose'
 import { db } from '@/lib/db'
 import { paginationFromRequest, parseSinceParam } from '@/lib/api-pagination'
-import { countAssignedLeadStats } from '@/lib/lead-assigned-stats'
+import { countAssignedLeadStatsCached } from '@/lib/lead-assigned-stats'
 import { ADVISOR_LEAD_LIST_SELECT } from '@/lib/lead-list-selects'
 import { leadSearchFilter, mergeLeadWhere } from '@/lib/lead-search-filter'
 import { getJwtSecret } from '@/lib/jwt-secret'
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
       }),
       includeStats
         ? Promise.all([
-            countAssignedLeadStats(db, baseWhere),
+            countAssignedLeadStatsCached(db, baseWhere, `adv:${userId}`),
             db.lead.count({
               where: { ...baseWhere, assignedCaseAssessorId: { not: null } },
             }),
@@ -85,7 +85,8 @@ export async function GET(req: NextRequest) {
       stats,
       serverTime: new Date().toISOString(),
     })
-  } catch {
+  } catch (error) {
+    console.error('[advisor/leads]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }

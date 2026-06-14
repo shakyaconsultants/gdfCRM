@@ -1,10 +1,13 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { jwtVerify } from 'jose'
+import { randomBytes } from 'crypto'
 import { db } from '@/lib/db'
 import bcrypt from 'bcryptjs'
+import { getJwtSecret } from '@/lib/jwt-secret'
+import { BCRYPT_COST, sanitizeImageUrl, validatePasswordInput } from '@/lib/password-policy'
 
-const secret = new TextEncoder().encode(process.env.JWT_SECRET)
+const secret = getJwtSecret()
 
 export async function GET(req: NextRequest) {
   const token = req.cookies.get('token')?.value
@@ -30,6 +33,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ employees })
   } catch (error) {
+    console.error('[admin/employees GET]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }
@@ -54,6 +58,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
     }
 
+    const pwError = validatePasswordInput(password)
+    if (pwError) {
+      return NextResponse.json({ error: pwError }, { status: 400 })
+    }
+
     let parsedBaseSalary: number | null = null
     if (baseSalaryMonthly !== undefined && baseSalaryMonthly !== null && baseSalaryMonthly !== '') {
       const n = Number(baseSalaryMonthly)
@@ -68,8 +77,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Email already in use' }, { status: 400 })
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10)
-    const newEmployeeId = `EMP-${Math.random().toString(36).substring(2, 8).toUpperCase()}`
+    const hashedPassword = await bcrypt.hash(password, BCRYPT_COST)
+    const newEmployeeId = `EMP-${randomBytes(4).toString('hex').toUpperCase()}`
 
     const emp = await db.user.create({
       data: {
@@ -78,7 +87,7 @@ export async function POST(req: NextRequest) {
         password: hashedPassword,
         employeeId: newEmployeeId,
         baseSalaryMonthly: parsedBaseSalary,
-        profileImageUrl: typeof profileImageUrl === 'string' && profileImageUrl.trim() ? profileImageUrl.trim() : null,
+        profileImageUrl: sanitizeImageUrl(profileImageUrl),
         role: 'EMPLOYEE'
       }
     })
@@ -111,17 +120,22 @@ export async function DELETE(req: NextRequest) {
     const { id } = await req.json()
     if (!id) return NextResponse.json({ error: 'Missing employee ID' }, { status: 400 })
 
-    // When deleting an employee, we should unassign their leads first or delete them?
-    // User said "remove CSV entries / leads" and "remove employees... should also clean that record from database".
-    // I'll unassign leads to prevent errors, but the employee record itself will be deleted.
-    await db.lead.updateMany({
-      where: { assignedToId: id },
-      data: { assignedToId: null }
-    })
+    // Audit SEC-4: only EMPLOYEE accounts may be deleted here — never an admin/advisor/assessor.
+    const target = await db.user.findFirst({ where: { id, role: 'EMPLOYEE' }, select: { id: true } })
+    if (!target) {
+      return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
+    }
 
-    await db.user.delete({
-      where: { id }
-    })
+    // Clean all lead FK relations (employee/advisor/assessor) in one transaction to avoid orphans.
+    await db.$transaction([
+      db.lead.updateMany({ where: { assignedToId: id }, data: { assignedToId: null } }),
+      db.lead.updateMany({ where: { assignedAdvisorId: id }, data: { assignedAdvisorId: null } }),
+      db.lead.updateMany({
+        where: { assignedCaseAssessorId: id },
+        data: { assignedCaseAssessorId: null },
+      }),
+      db.user.delete({ where: { id } }),
+    ])
 
     return NextResponse.json({ success: true })
   } catch (error) {

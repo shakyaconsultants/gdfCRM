@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Navigation from '@/components/Navigation'
 import {
   Save,
@@ -26,6 +26,9 @@ import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 import { LeadSaveQueue } from '@/lib/lead-save-queue'
 import { MIN_LEAD_SEARCH_LENGTH } from '@/lib/lead-search-filter'
+
+/** Server-side delta page cap (`DELTA_TAKE` in /api/employee/leads). Audit CRM-1. */
+const DELTA_CAP = 100
 
 function formatLeadUpdated(iso: string | null | undefined) {
   if (!iso) return { relative: '—', full: '' }
@@ -83,6 +86,11 @@ export default function EmployeeCrmPanel() {
   const lastSyncRef = useRef<string | null>(null)
   const pausePollRef = useRef(false)
   const interactionUntilRef = useRef(0)
+  // Audit CRM-1: track last known server total so a poll can detect that a bulk admin
+  // assignment added more leads than the 100-row delta cap could surface.
+  const lastTotalRef = useRef(0)
+  const reconcileScheduledRef = useRef(false)
+  const fetchLeadsRef = useRef<((opts?: { silent?: boolean; poll?: boolean }) => Promise<void>) | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [savingId, setSavingId] = useState<string | null>(null)
   
@@ -95,8 +103,11 @@ export default function EmployeeCrmPanel() {
   const [formDraft, setFormDraft] = useState<EmployeeIntakeForm | null>(null)
   const lastSavedFormJson = useRef('')
   const intakeModalOpenRef = useRef(false)
-  intakeModalOpenRef.current = !!expandedId
   const restrictCopy = useRestrictCopy()
+
+  useEffect(() => {
+    intakeModalOpenRef.current = !!expandedId
+  }, [expandedId])
 
   const bumpInteractionPause = useCallback((ms = 90_000) => {
     interactionUntilRef.current = Date.now() + ms
@@ -166,10 +177,6 @@ export default function EmployeeCrmPanel() {
     return () => clearTimeout(t)
   }, [expandedId, formDraft, persistIntake])
 
-  useEffect(() => {
-    if (!expandedId) setFormDraft(null)
-  }, [expandedId])
-
   const buildLeadsQuery = useCallback(
     (opts?: { since?: string }) => {
       const params = new URLSearchParams()
@@ -203,7 +210,30 @@ export default function EmployeeCrmPanel() {
         ])
         const leadsData = await leadsRes.json()
         if (opts?.poll) {
-          if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
+          if (typeof leadsData.total === 'number') {
+            const newTotal = leadsData.total
+            const prevTotal = lastTotalRef.current
+            const mergedCount = Array.isArray(leadsData.deltas) ? leadsData.deltas.length : 0
+            setTotalLeads(newTotal)
+            lastTotalRef.current = newTotal
+            // Audit CRM-1: a bulk admin assignment can add more leads than the 100-row
+            // delta cap can carry. When the total grew by more than we merged (or the cap
+            // was hit), do ONE silent full refresh — but only when the user isn't actively
+            // interacting, so it won't disrupt copying.
+            const grewBeyondDeltas = newTotal - prevTotal > mergedCount
+            const hitDeltaCap = mergedCount >= DELTA_CAP
+            if (
+              (grewBeyondDeltas || hitDeltaCap) &&
+              !isPollPaused() &&
+              !reconcileScheduledRef.current
+            ) {
+              reconcileScheduledRef.current = true
+              setTimeout(() => {
+                reconcileScheduledRef.current = false
+                void fetchLeadsRef.current?.({ silent: true })
+              }, 0)
+            }
+          }
           if (leadsData.stats) setKpiStats(leadsData.stats)
           if (Array.isArray(leadsData.deltas) && leadsData.deltas.length > 0) {
             const skipIds = saveQueueRef.current.pendingLeadIds()
@@ -213,7 +243,10 @@ export default function EmployeeCrmPanel() {
           return
         }
         if (leadsData.leads) setLeads(leadsData.leads)
-        if (typeof leadsData.total === 'number') setTotalLeads(leadsData.total)
+        if (typeof leadsData.total === 'number') {
+          setTotalLeads(leadsData.total)
+          lastTotalRef.current = leadsData.total
+        }
         if (typeof leadsData.totalPages === 'number') setTotalPages(leadsData.totalPages)
         if (leadsData.stats) setKpiStats(leadsData.stats)
         if (leadsData.serverTime) lastSyncRef.current = leadsData.serverTime
@@ -227,6 +260,10 @@ export default function EmployeeCrmPanel() {
     },
     [buildLeadsQuery, isPollPaused]
   )
+
+  useEffect(() => {
+    fetchLeadsRef.current = fetchLeads
+  }, [fetchLeads])
 
   useEffect(() => {
     void fetchLeads()
@@ -355,7 +392,10 @@ export default function EmployeeCrmPanel() {
     return () => clearInterval(id)
   }, [paginatedLeads])
 
-  const closeIntakeModal = () => setExpandedId(null)
+  const closeIntakeModal = () => {
+    setExpandedId(null)
+    setFormDraft(null)
+  }
 
   const intakeHasData = (lead: Lead) => !!lead.remarks?.trim()
 
@@ -532,10 +572,10 @@ export default function EmployeeCrmPanel() {
                         </button>
                       </td>
                       <td className="p-3 text-neutral-300 whitespace-nowrap">{lead.title || '—'}</td>
-                      <td className="p-3 font-medium text-white whitespace-nowrap">{lead.firstName || '—'}</td>
-                      <td className="p-3 text-neutral-300 whitespace-nowrap">{lead.lastName || '—'}</td>
+                      <td className="p-3 font-medium text-white whitespace-nowrap select-text">{lead.firstName || '—'}</td>
+                      <td className="p-3 text-neutral-300 whitespace-nowrap select-text">{lead.lastName || '—'}</td>
                       <td className="p-3 text-neutral-400 min-w-[10rem] max-w-[18rem] whitespace-normal break-words align-top select-text" title={lead.address || ''}>{lead.address || '—'}</td>
-                      <td className="p-3 text-neutral-400 whitespace-nowrap">{lead.postCode || '—'}</td>
+                      <td className="p-3 text-neutral-400 whitespace-nowrap select-text">{lead.postCode || '—'}</td>
                       <td className="p-3 font-mono text-neutral-300 whitespace-nowrap">
                         <a
                           href={`tel:${lead.phone}`}

@@ -3,6 +3,7 @@ import type { NextRequest } from 'next/server'
 import { jwtVerify } from 'jose'
 import cloudinary, { isCloudinaryConfigured } from '@/lib/cloudinary'
 import { getJwtSecret } from '@/lib/jwt-secret'
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
 import {
   ALLOWED_LEAD_IMPORT_MIME,
   MAX_CSV_IMPORT_BYTES,
@@ -47,6 +48,19 @@ export async function POST(req: NextRequest) {
     const { payload } = await jwtVerify(token, secret)
     if (payload.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Only admins can upload lead files.' }, { status: 403 })
+    }
+
+    // Audit SEC-8: per-admin upload rate limit.
+    const rl = await checkRateLimit({
+      key: `upload:lead-import:${typeof payload.id === 'string' ? payload.id : getClientIp(req)}`,
+      limit: 30,
+      windowMs: 10 * 60 * 1000,
+    })
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: 'Too many uploads. Please wait and try again.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      )
     }
 
     if (!isCloudinaryConfigured()) {
@@ -96,19 +110,25 @@ export async function POST(req: NextRequest) {
     const bytes = await uploadFile.arrayBuffer()
     const buffer = Buffer.from(bytes)
 
-    const result = await new Promise<unknown>((resolve, reject) => {
-      const uploadStream = cloudinary.uploader.upload_stream(
-        { resource_type: 'raw', folder: 'crm_leads' },
-        (error, uploadResult) => {
-          if (error) reject(error)
-          else resolve(uploadResult)
-        }
-      )
-      uploadStream.end(buffer)
-    })
+    const result = await new Promise<{ secure_url?: string; public_id?: string }>(
+      (resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream(
+          { resource_type: 'raw', folder: 'crm_leads' },
+          (error, uploadResult) => {
+            if (error) reject(error)
+            else resolve(uploadResult as { secure_url?: string; public_id?: string })
+          }
+        )
+        uploadStream.end(buffer)
+      }
+    )
 
     console.log(`[${LOG_SCOPE}] ok name=${fileName} bytes=${uploadFile.size}`)
-    return NextResponse.json({ success: true, result })
+    // Audit SEC-11: return only the safe subset, not the full Cloudinary object.
+    return NextResponse.json({
+      success: true,
+      result: { secure_url: result.secure_url ?? null, public_id: result.public_id ?? null },
+    })
   } catch (error) {
     console.error(`[${LOG_SCOPE}] failed`, error)
     return NextResponse.json({ error: friendlyUploadError(error) }, { status: 500 })

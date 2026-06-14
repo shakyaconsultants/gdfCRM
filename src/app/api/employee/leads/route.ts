@@ -3,11 +3,13 @@ import type { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { enforceEmployeeWithCrm } from '@/lib/enforce-employee-auth'
 import { paginationFromRequest, parseSinceParam } from '@/lib/api-pagination'
-import { countAssignedLeadStats } from '@/lib/lead-assigned-stats'
+import { countAssignedLeadStatsCached } from '@/lib/lead-assigned-stats'
 import { EMPLOYEE_LEAD_LIST_SELECT } from '@/lib/lead-list-selects'
 import { leadSearchFilter, mergeLeadWhere } from '@/lib/lead-search-filter'
+import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 
 const DELTA_TAKE = 100
+const ALLOWED_DISPOSITIONS = new Set<string>(LEAD_DISPOSITIONS)
 
 export async function GET(req: NextRequest) {
   const gated = await enforceEmployeeWithCrm(req)
@@ -28,7 +30,7 @@ export async function GET(req: NextRequest) {
       const [total, stats] = includeStats
         ? await Promise.all([
             db.lead.count({ where: baseWhere }),
-            countAssignedLeadStats(db, baseWhere),
+            countAssignedLeadStatsCached(db, baseWhere, `emp:${gated.userId}`),
           ])
         : [undefined, undefined]
       const response = NextResponse.json({
@@ -41,7 +43,12 @@ export async function GET(req: NextRequest) {
       return response
     }
 
-    const disposition = req.nextUrl.searchParams.get('disposition') ?? 'All'
+    const dispositionParam = req.nextUrl.searchParams.get('disposition') ?? 'All'
+    // Audit SEC-9: only filter by a known disposition; otherwise treat as "All".
+    const disposition =
+      dispositionParam !== 'All' && ALLOWED_DISPOSITIONS.has(dispositionParam)
+        ? dispositionParam
+        : 'All'
     const search = req.nextUrl.searchParams.get('search') ?? ''
     const includeStats = req.nextUrl.searchParams.get('stats') === 'true'
     const { page, pageSize, skip } = paginationFromRequest(req, {
@@ -64,7 +71,9 @@ export async function GET(req: NextRequest) {
         skip,
         take: pageSize,
       }),
-      includeStats ? countAssignedLeadStats(db, baseWhere) : Promise.resolve(undefined),
+      includeStats
+        ? countAssignedLeadStatsCached(db, baseWhere, `emp:${gated.userId}`)
+        : Promise.resolve(undefined),
     ])
 
     const response = NextResponse.json({
@@ -78,7 +87,8 @@ export async function GET(req: NextRequest) {
     })
     response.headers.set('Cache-Control', 'no-store')
     return response
-  } catch {
+  } catch (error) {
+    console.error('[employee/leads]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }

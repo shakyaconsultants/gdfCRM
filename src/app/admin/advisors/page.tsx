@@ -442,7 +442,7 @@ export default function AdminAdvisorsPage() {
                         <p><span className="text-neutral-500">Pass:</span> <span className="text-emerald-400 font-bold">{successData.pass}</span></p>
                       </div>
                       <p className="text-[10px] text-amber-500 mt-3 flex items-center gap-1">
-                        <Save className="w-3 h-3" /> Copy these details now. They won't be shown again.
+                        <Save className="w-3 h-3" /> Copy these details now. They won&apos;t be shown again.
                       </p>
                     </motion.div>
                   )}

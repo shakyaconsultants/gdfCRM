@@ -13,12 +13,23 @@ export function normalizeLeadSearch(raw: string | null | undefined): string {
 export function leadSearchFilter(search: string): Prisma.LeadWhereInput | undefined {
   const q = normalizeLeadSearch(search)
   if (!q) return undefined
+
+  // Audit PERF-1: for purely numeric queries (phone lookups — the most common search)
+  // add an anchored prefix term, which CAN use the unique `phone` index instead of a
+  // full-collection regex scan. We keep `contains` as a fallback so no existing match is
+  // lost (e.g. when phones are stored with a country-code prefix).
+  const digits = q.replace(/\D/g, '')
+  const isPhoneLike = /^[+\d][\d\s-]*$/.test(q) && digits.length >= 3
+
   return {
     OR: [
-      { firstName: { contains: q } },
-      { lastName: { contains: q } },
-      { email: { contains: q } },
-      { phone: { contains: q } },
+      // Audit PERF-1: case-insensitive for correctness ("john" matches "John").
+      { firstName: { contains: q, mode: 'insensitive' } },
+      { lastName: { contains: q, mode: 'insensitive' } },
+      { email: { contains: q, mode: 'insensitive' } },
+      ...(isPhoneLike
+        ? [{ phone: { startsWith: digits } }, { phone: { contains: q } }]
+        : [{ phone: { contains: q } }]),
     ],
   }
 }

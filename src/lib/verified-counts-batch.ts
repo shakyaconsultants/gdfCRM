@@ -24,6 +24,7 @@ export async function verifiedCountsByEmployee(
     return map
   } catch (err) {
     // Fallback if verifiedAt filter fails on stale Prisma client
+    console.error('[verifiedCountsByEmployee] primary groupBy failed, using fallback', err)
     const rows = await db.lead.groupBy({
       by: ['assignedToId'],
       where: {

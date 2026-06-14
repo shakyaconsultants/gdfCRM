@@ -1,5 +1,5 @@
 import type { JWTPayload } from 'jose'
-import { isGlobalOtpEnabled } from '@/lib/otp-config'
+import { isGlobalOtpEnabled, isOtpBypassAllowed } from '@/lib/otp-config'
 import { CRM_SESSION_JWT_PURPOSE } from '@/lib/employee-crm-session'
 
 export type AppJwtClaims = JWTPayload & {
@@ -10,7 +10,8 @@ export type AppJwtClaims = JWTPayload & {
 
 export function employeeHasCrmAccess(payload: AppJwtClaims): boolean {
   if (payload.role !== 'EMPLOYEE') return false
-  if (!isGlobalOtpEnabled()) return true
+  // Audit SEC-1: a missing ADMIN_EMAIL must not silently unlock CRM in production.
+  if (!isGlobalOtpEnabled()) return isOtpBypassAllowed()
   if (payload.purpose === CRM_SESSION_JWT_PURPOSE && payload.crm === true) return true
   return payload.crm === true
 }

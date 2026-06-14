@@ -4,6 +4,7 @@ import { jwtVerify } from 'jose'
 import { db } from '@/lib/db'
 import cloudinary, { isCloudinaryConfigured } from '@/lib/cloudinary'
 import { getJwtSecret } from '@/lib/jwt-secret'
+import { checkRateLimit, getClientIp } from '@/lib/rate-limit'
 import {
   ALLOWED_LEAD_DOCUMENT_MIME,
   MAX_LEAD_DOCUMENT_BYTES,
@@ -47,6 +48,7 @@ export async function GET(
     const documents = await db.leadDocument.findMany({
       where: { leadId },
       orderBy: { createdAt: 'desc' },
+      take: 50,
     })
 
     return NextResponse.json({ documents })
@@ -71,6 +73,19 @@ export async function POST(
     const advisorId = payload.id as string
     const { id: leadId } = await params
 
+    // Audit SEC-8: per-advisor upload rate limit.
+    const rl = await checkRateLimit({
+      key: `upload:lead-doc:${advisorId}:${getClientIp(req)}`,
+      limit: 40,
+      windowMs: 10 * 60 * 1000,
+    })
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: 'Too many uploads. Please wait and try again.' },
+        { status: 429, headers: { 'Retry-After': String(rl.retryAfterSec) } }
+      )
+    }
+
     const lead = await getAdvisorLead(advisorId, leadId)
     if (!lead) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
@@ -85,8 +100,13 @@ export async function POST(
     }
 
     const formData = await req.formData()
-    const file = formData.get('file') as File | null
-    if (!file || !file.size) {
+    const fileEntry = formData.get('file')
+    // Audit LOW-4: validate it's actually a file before using it.
+    if (!fileEntry || !(fileEntry instanceof Blob)) {
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+    }
+    const file = fileEntry as File
+    if (!file.size) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     }
     if (!hasAllowedMime(file.type || '', ALLOWED_LEAD_DOCUMENT_MIME)) {

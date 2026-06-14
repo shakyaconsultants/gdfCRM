@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { jwtVerify } from 'jose'
+import { createHash } from 'crypto'
 import type { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { parseLeadPhoneForStorage } from '@/lib/phone'
@@ -35,6 +36,34 @@ import { isMongoObjectId } from '@/lib/mongo-object-id'
 const LOG_SCOPE = 'ADMIN LEADS'
 const IMPORT_LOG_SCOPE = 'ADMIN LEADS IMPORT'
 const secret = getJwtSecret()
+
+/**
+ * Audit (CRM polish): short-window server-side dedupe so a rapid double-submit of the
+ * same assign/unassign (e.g. double-click or a retried request) can't split a batch
+ * across two operations. The frontend already disables the button while in flight; this
+ * is the belt-and-braces server guard.
+ */
+const ASSIGN_DEDUPE_MS = 4000
+const recentAssignments = new Map<string, number>()
+
+function claimAssignmentSlot(
+  performedById: string,
+  target: string,
+  leadIds: string[]
+): boolean {
+  const now = Date.now()
+  const hash = createHash('sha1').update(leadIds.slice().sort().join(',')).digest('hex')
+  const key = `${performedById}:${target}:${leadIds.length}:${hash}`
+  const last = recentAssignments.get(key)
+  if (last && now - last < ASSIGN_DEDUPE_MS) return false
+  recentAssignments.set(key, now)
+  if (recentAssignments.size > 500) {
+    for (const [k, ts] of recentAssignments) {
+      if (now - ts >= ASSIGN_DEDUPE_MS) recentAssignments.delete(k)
+    }
+  }
+  return true
+}
 
 export const preferredRegion = 'bom1'
 
@@ -254,7 +283,11 @@ export async function GET(req: NextRequest) {
 
     const mode = countOnly ? 'countOnly' : idsOnly ? 'idsOnly' : 'list'
 
-    if (unassignedOnly || searchParams.get('repairUnassigned') === 'true') {
+    // Audit (CRM flow / PERF): normalization is a write — don't run it on every
+    // unassigned listing (a hot read path). It now runs only on the explicit repair
+    // trigger; the unassign action + the dedicated normalize-unassigned route keep the
+    // assignable pool consistent.
+    if (searchParams.get('repairUnassigned') === 'true') {
       const repaired = await normalizeUnassignedLeadDispositions(db)
       if (repaired.count > 0) {
         invalidateCountCache()
@@ -515,16 +548,22 @@ export async function POST(req: NextRequest) {
       invalidateCountCache()
       invalidateAdminDashboardCache()
       void refreshDashboardStatsAfterLeadMutation()
+    } else {
+      // Audit BUG-1: every row was a duplicate/invalid — don't leave an empty import
+      // batch cluttering the import filter dropdown.
+      await db.leadImport.delete({ where: { id: leadImport.id } }).catch(() => {})
     }
 
+    const resultImportId = newLeadsToInsert.length > 0 ? leadImport.id : null
+
     console.log(
-      `[${IMPORT_LOG_SCOPE}] done created=${createdCount} skipped=${skippedCount} received=${leadsData.length} importId=${leadImport.id}`
+      `[${IMPORT_LOG_SCOPE}] done created=${createdCount} skipped=${skippedCount} received=${leadsData.length} importId=${resultImportId ?? 'none'}`
     )
     return NextResponse.json({
       success: true,
       createdCount,
       skippedCount,
-      importId: leadImport.id,
+      importId: resultImportId,
       fileName: leadImport.fileName,
     })
   } catch (error) {
@@ -578,6 +617,17 @@ export async function PUT(req: NextRequest) {
     const sharedImportId = inferSharedImportId(ownershipRows)
 
     if (shouldUnassign) {
+      if (performedById && !claimAssignmentSlot(performedById, 'UNASSIGN', normalizedLeadIds)) {
+        return NextResponse.json({
+          success: true,
+          unassigned: true,
+          deduped: true,
+          updatedCount: 0,
+          requestedCount: normalizedLeadIds.length,
+          matchedCount,
+        })
+      }
+
       const updated = await db.lead.updateMany({
         where: { id: { in: normalizedLeadIds } },
         data: employeeUnassignUpdate(),
@@ -634,6 +684,18 @@ export async function PUT(req: NextRequest) {
     })
     if (!employee || employee.role !== 'EMPLOYEE') {
       return NextResponse.json({ error: 'Invalid employee selection' }, { status: 400 })
+    }
+
+    if (performedById && !claimAssignmentSlot(performedById, employee.id, normalizedLeadIds)) {
+      return NextResponse.json({
+        success: true,
+        deduped: true,
+        updatedCount: 0,
+        requestedCount: normalizedLeadIds.length,
+        matchedCount,
+        assignedToId: employee.id,
+        assignedToName: employee.name,
+      })
     }
 
     // Assign or transfer — new owner + reset prior employee CRM work (disposition, intake, etc.).

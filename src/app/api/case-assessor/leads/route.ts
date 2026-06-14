@@ -72,7 +72,8 @@ export async function GET(req: NextRequest) {
         : null,
       serverTime: new Date().toISOString(),
     })
-  } catch {
+  } catch (error) {
+    console.error('[case-assessor/leads]', error)
     return NextResponse.json({ error: 'Server error' }, { status: 500 })
   }
 }

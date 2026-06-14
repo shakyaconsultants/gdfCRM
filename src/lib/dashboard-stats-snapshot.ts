@@ -130,20 +130,36 @@ export async function refreshDashboardSnapshotByKey(scopeKey: string, background
   return refreshDashboardSnapshot(db, scopeKey, range, { background })
 }
 
-/** After bulk lead changes — rebuild every stored scope plus all-time. */
-export async function refreshDashboardStatsAfterLeadMutation() {
-  const rows = await db.dashboardStats.findMany({ select: { scopeKey: true } })
-  const keys = new Set(rows.map((r) => r.scopeKey))
-  keys.add('all')
-  keys.add(defaultRolling30dScope().scopeKey)
+/** Minimum gap between mutation-triggered refreshes (audit PERF-2 debounce). */
+const MUTATION_REFRESH_DEBOUNCE_MS = 30 * 1000
+let lastMutationRefreshAt = 0
 
-  await Promise.all(
-    [...keys].map((scopeKey) =>
-      refreshDashboardSnapshotByKey(scopeKey, true).catch((err) => {
-        console.error('[DASHBOARD SNAPSHOT] refresh failed', scopeKey, err)
-      })
-    )
-  )
+/**
+ * After bulk lead changes, refresh ONLY the two "hot" scopes (all-time + rolling 30d).
+ * Audit PERF-2: previously this rebuilt EVERY stored scope — each a 24+ query payload —
+ * so a single "assign 5,000 leads" click could kick off dozens of full recomputations.
+ * Every other date scope now refreshes lazily on next view via the existing
+ * stale-while-revalidate path in getDashboardFromSnapshot(). A short debounce coalesces
+ * bursts of mutations (the busiest operation).
+ */
+export async function refreshDashboardStatsAfterLeadMutation() {
+  const now = Date.now()
+  if (now - lastMutationRefreshAt < MUTATION_REFRESH_DEBOUNCE_MS) {
+    return
+  }
+  lastMutationRefreshAt = now
+
+  const rolling = defaultRolling30dScope()
+  await Promise.all([
+    refreshDashboardSnapshot(db, 'all', null, { background: true }).catch((err) => {
+      console.error('[DASHBOARD SNAPSHOT] refresh failed', 'all', err)
+    }),
+    refreshDashboardSnapshot(db, rolling.scopeKey, rolling.range, { background: true }).catch(
+      (err) => {
+        console.error('[DASHBOARD SNAPSHOT] refresh failed', rolling.scopeKey, err)
+      }
+    ),
+  ])
 }
 
 function refreshScheduledScopes() {
