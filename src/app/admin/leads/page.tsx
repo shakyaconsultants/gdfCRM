@@ -943,7 +943,7 @@ function AdminLeadsPageInner() {
   const handleAutoSelect = async () => {
     const count = Number(commonQty)
     if (isNaN(count) || count <= 0) return
-    if (!filterImportId) {
+    if (!filterImportId && !showSelectedOnly) {
       setNotification({
         message: 'Select an import batch first (top dropdown), then use AUTO SELECT.',
         type: 'warn',
@@ -954,15 +954,9 @@ function AdminLeadsPageInner() {
     setPageLoading(true)
     pausePollRef.current = true
     try {
-      // Fresh assignable pool only: no employee, disposition New, active import batch — ignore table filters.
-      const params = new URLSearchParams({
-        page: '1',
-        pageSize: String(count),
-        idsOnly: 'true',
-        unassignedOnly: 'true',
-        disposition: LEAD_DISPOSITIONS[0],
-        importId: filterImportId,
-      })
+      // Select the first N leads of the CURRENT view — honoring the active
+      // file / employee / disposition / search filters (same query the table uses).
+      const params = buildLeadsQuery({ page: 1, pageSize: count, idsOnly: true })
       const res = await fetch(`/api/admin/leads?${params.toString()}`, {
         cache: 'no-store',
         credentials: 'include',
@@ -970,10 +964,6 @@ function AdminLeadsPageInner() {
       const data = await res.json().catch(() => ({}))
       const ids: string[] = res.ok && Array.isArray(data.ids) ? data.ids : []
       const poolTotal = typeof data.total === 'number' ? data.total : ids.length
-      const batchLabel =
-        filterImportId === 'none'
-          ? 'Existing leads'
-          : selectedImportBatch?.fileName ?? 'this batch'
 
       setSelectedLeads(new Set(ids))
       setBulkSelectAll(false)
@@ -981,8 +971,8 @@ function AdminLeadsPageInner() {
       setNotification({
         message:
           ids.length > 0
-            ? `Selected ${ids.length} unassigned · New lead(s) from ${poolTotal.toLocaleString()} in "${batchLabel}" (newest first)`
-            : `No unassigned · New leads in "${batchLabel}" — import fresh data or run repair`,
+            ? `Selected ${ids.length} of ${poolTotal.toLocaleString()} lead(s) matching the current filters (newest first)`
+            : 'No leads match the current filters.',
         type: ids.length > 0 ? 'success' : 'warn',
       })
     } finally {
