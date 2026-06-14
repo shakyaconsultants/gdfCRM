@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Navigation from '@/components/Navigation'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -79,7 +79,7 @@ const EMPLOYEES_CACHE_MS = 5 * 60 * 1000
 const FILTER_DISPOSITIONS = ['All', ...LEAD_DISPOSITIONS]
 const EDIT_DISPOSITIONS = LEAD_DISPOSITIONS
 
-export default function AdminLeadsPage() {
+function AdminLeadsPageInner() {
   const searchParams = useSearchParams()
   const [leads, setLeads] = useState<Lead[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -1797,5 +1797,14 @@ export default function AdminLeadsPage() {
         )}
       </AnimatePresence>
     </div>
+  )
+}
+
+export default function AdminLeadsPage() {
+  // useSearchParams() requires a Suspense boundary during prerender (Next.js CSR bailout).
+  return (
+    <Suspense fallback={null}>
+      <AdminLeadsPageInner />
+    </Suspense>
   )
 }
