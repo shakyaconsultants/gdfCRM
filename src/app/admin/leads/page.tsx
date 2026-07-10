@@ -184,6 +184,7 @@ function AdminLeadsPageInner() {
 
   const pickDefaultImportFilter = useCallback(
     (imports: LeadImportBatch[], legacyCount: number, current: string) => {
+      if (current === 'all') return 'all'
       if (current === 'none') return 'none'
       if (current && current !== 'none' && imports.some((i) => i.id === current)) {
         return current
@@ -474,14 +475,23 @@ function AdminLeadsPageInner() {
   }, [])
 
   useEffect(() => {
-    if (employeeFilterFromUrlRef.current) return
-    const fromUrl =
+    const employeeFromUrl =
       searchParams.get('employee')?.trim() ||
       searchParams.get('assignedToId')?.trim() ||
       ''
-    if (fromUrl) {
-      setFilterEmployeeId(fromUrl)
+    const importFromUrl = searchParams.get('importId')?.trim() ?? ''
+
+    if (employeeFromUrl && !employeeFilterFromUrlRef.current) {
+      setFilterEmployeeId(employeeFromUrl)
       employeeFilterFromUrlRef.current = true
+    }
+
+    if (importFromUrl === 'all') {
+      setFilterImportId('all')
+      importFilterInitializedRef.current = true
+    } else if (employeeFromUrl && !importFromUrl) {
+      setFilterImportId('all')
+      importFilterInitializedRef.current = true
     }
   }, [searchParams])
 
@@ -1188,6 +1198,7 @@ function AdminLeadsPageInner() {
                   disabled={importsLoading && !filterImportId}
                   className="w-full bg-neutral-900 border border-blue-500/30 text-white rounded-lg pl-10 pr-4 py-2.5 text-sm appearance-none transition-all normal-case font-medium disabled:opacity-60"
                 >
+                  <option value="all">All import batches</option>
                   <option value="none">
                     Existing leads
                     {importsLoading

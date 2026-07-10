@@ -196,7 +196,7 @@ export default function AdminAssignmentsPage() {
                         </td>
                         <td className="p-3 text-center pr-4">
                           <Link
-                            href={`/admin/leads?employee=${encodeURIComponent(row.id)}`}
+                            href={`/admin/leads?employee=${encodeURIComponent(row.id)}&importId=all`}
                             className="text-xs font-bold text-blue-400 hover:text-blue-300 underline underline-offset-2"
                           >
                             Open

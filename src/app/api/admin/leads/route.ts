@@ -175,7 +175,7 @@ function buildAdminLeadWhere(opts: {
 
   if (opts.importId === 'none') {
     and.push(legacyImportWhere())
-  } else if (opts.importId) {
+  } else if (opts.importId && opts.importId !== 'all') {
     and.push({ importId: opts.importId })
   }
 
