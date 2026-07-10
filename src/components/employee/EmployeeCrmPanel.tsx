@@ -26,6 +26,7 @@ import { useVisibilityPolling } from '@/hooks/useVisibilityPolling'
 import { mergeLeadDeltas } from '@/lib/lead-sync-client'
 import { LeadSaveQueue } from '@/lib/lead-save-queue'
 import { MIN_LEAD_SEARCH_LENGTH } from '@/lib/lead-search-filter'
+import AdminDateRangeFilter from '@/components/AdminDateRangeFilter'
 
 /** Server-side delta page cap (`DELTA_TAKE` in /api/employee/leads). Audit CRM-1. */
 const DELTA_CAP = 100
@@ -64,6 +65,7 @@ type Lead = {
   paymentReceived: boolean
   caseStatus?: string | null
   callbackAt: string | null
+  assignedDate: string | null
   updatedAt: string
 }
 const DISPOSITIONS = [...LEAD_DISPOSITIONS]
@@ -83,6 +85,9 @@ export default function EmployeeCrmPanel() {
   })
   const [searchTerm, setSearchTerm] = useState('')
   const [filterDisposition, setFilterDisposition] = useState('All')
+  const [assignedDateFrom, setAssignedDateFrom] = useState('')
+  const [assignedDateTo, setAssignedDateTo] = useState('')
+  const hasAssignedDateFilter = assignedDateFrom !== '' && assignedDateTo !== ''
   const lastSyncRef = useRef<string | null>(null)
   const pausePollRef = useRef(false)
   const interactionUntilRef = useRef(0)
@@ -188,10 +193,14 @@ export default function EmployeeCrmPanel() {
         params.set('pageSize', String(pageSize))
         if (searchTerm) params.set('search', searchTerm)
         if (filterDisposition !== 'All') params.set('disposition', filterDisposition)
+        if (assignedDateFrom && assignedDateTo) {
+          params.set('assignedFrom', assignedDateFrom)
+          params.set('assignedTo', assignedDateTo)
+        }
       }
       return params.toString()
     },
-    [currentPage, pageSize, searchTerm, filterDisposition]
+    [currentPage, pageSize, searchTerm, filterDisposition, assignedDateFrom, assignedDateTo]
   )
 
   const fetchLeads = useCallback(
@@ -284,6 +293,31 @@ export default function EmployeeCrmPanel() {
     }, 300)
     return () => clearTimeout(timer)
   }, [displaySearchTerm])
+
+  const setAssignedDay = useCallback((day: 'today' | 'yesterday') => {
+    const d = new Date()
+    if (day === 'yesterday') d.setDate(d.getDate() - 1)
+    const key = format(d, 'yyyy-MM-dd')
+    setAssignedDateFrom(key)
+    setAssignedDateTo(key)
+    setCurrentPage(1)
+  }, [])
+
+  const clearAssignedDateFilter = useCallback(() => {
+    setAssignedDateFrom('')
+    setAssignedDateTo('')
+    setCurrentPage(1)
+  }, [])
+
+  const onAssignedDateFromChange = useCallback((v: string) => {
+    setAssignedDateFrom(v)
+    setCurrentPage(1)
+  }, [])
+
+  const onAssignedDateToChange = useCallback((v: string) => {
+    setAssignedDateTo(v)
+    setCurrentPage(1)
+  }, [])
 
   const paginatedLeads = leads
   const pageStart = totalLeads === 0 ? 0 : (currentPage - 1) * pageSize + 1
@@ -443,6 +477,38 @@ export default function EmployeeCrmPanel() {
           </div>
         </div>
 
+        <div className="shrink-0 mb-4 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setAssignedDay('today')}
+              className="px-3 py-1.5 text-[10px] font-bold uppercase bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-md border border-neutral-700"
+            >
+              Today
+            </button>
+            <button
+              type="button"
+              onClick={() => setAssignedDay('yesterday')}
+              className="px-3 py-1.5 text-[10px] font-bold uppercase bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded-md border border-neutral-700"
+            >
+              Yesterday
+            </button>
+          </div>
+          <AdminDateRangeFilter
+            dateFrom={assignedDateFrom}
+            dateTo={assignedDateTo}
+            onDateFromChange={onAssignedDateFromChange}
+            onDateToChange={onAssignedDateToChange}
+            onAllTime={clearAssignedDateFilter}
+          />
+          {hasAssignedDateFilter ? (
+            <p className="text-[11px] text-neutral-500 px-1">
+              Showing leads assigned between {assignedDateFrom} and {assignedDateTo}. Older leads
+              without an assignment date appear under All time only.
+            </p>
+          ) : null}
+        </div>
+
         {/* KPI Stats Banner */}
         <div className="shrink-0 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-4">
           {[
@@ -525,6 +591,7 @@ export default function EmployeeCrmPanel() {
                   <th className="p-3 font-medium whitespace-nowrap">Phone</th>
                   <th className="p-3 font-medium whitespace-nowrap">Email</th>
                   <th className="p-3 font-medium min-w-[9rem]">Disposition</th>
+                  <th className="p-3 font-medium whitespace-nowrap min-w-[7rem]">Assigned</th>
                   <th className="p-3 font-medium whitespace-nowrap min-w-[7rem]">Updated</th>
                   <th className="p-3 font-medium min-w-[11rem]">Callback</th>
                   <th className="p-3 font-medium text-center whitespace-nowrap">Intake</th>
@@ -534,20 +601,21 @@ export default function EmployeeCrmPanel() {
               <tbody className="divide-y divide-neutral-800/50">
                 {loading ? (
                    <tr>
-                     <td colSpan={13} className="p-10 text-center text-neutral-500">
+                     <td colSpan={14} className="p-10 text-center text-neutral-500">
                         <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2" />
                         Loading assigned leads...
                      </td>
                    </tr>
                 ) : paginatedLeads.length === 0 ? (
                   <tr>
-                    <td colSpan={13} className="p-10 text-center text-neutral-500">
+                    <td colSpan={14} className="p-10 text-center text-neutral-500">
                       No leads match your search or filter.
                     </td>
                   </tr>
                 ) : (
                   paginatedLeads.map(lead => {
                     const updated = formatLeadUpdated(lead.updatedAt)
+                    const assigned = formatLeadUpdated(lead.assignedDate)
                     return (
                     <motion.tr 
                       key={lead.id}
@@ -598,6 +666,14 @@ export default function EmployeeCrmPanel() {
                             updateLead(lead.id, updates, true)
                           }}
                         />
+                      </td>
+                      <td className="p-3 align-top whitespace-nowrap select-text" title={assigned.full}>
+                        <span className="text-[11px] text-neutral-400 block">{assigned.relative}</span>
+                        {assigned.full ? (
+                          <span className="text-[10px] text-neutral-600 block mt-0.5">{assigned.full}</span>
+                        ) : (
+                          <span className="text-[10px] text-neutral-600 block mt-0.5">—</span>
+                        )}
                       </td>
                       <td className="p-3 align-top whitespace-nowrap select-text" title={updated.full}>
                         <span className="text-[11px] text-neutral-400 block">{updated.relative}</span>

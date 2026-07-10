@@ -21,6 +21,7 @@ export const EMPLOYEE_LEAD_LIST_SELECT = {
   paymentReceived: true,
   caseStatus: true,
   callbackAt: true,
+  assignedDate: true,
   updatedAt: true,
 } as const
 

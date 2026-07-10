@@ -6,6 +6,7 @@ import { paginationFromRequest, parseSinceParam } from '@/lib/api-pagination'
 import { countAssignedLeadStatsCached } from '@/lib/lead-assigned-stats'
 import { EMPLOYEE_LEAD_LIST_SELECT } from '@/lib/lead-list-selects'
 import { leadSearchFilter, mergeLeadWhere } from '@/lib/lead-search-filter'
+import { getLeadAssignedDateRange } from '@/lib/adminDateRange'
 import { LEAD_DISPOSITIONS } from '@/lib/lead-workflow'
 
 const DELTA_TAKE = 100
@@ -56,11 +57,24 @@ export async function GET(req: NextRequest) {
       maxPageSize: 100,
     })
 
+    const assignedRange = getLeadAssignedDateRange(req.nextUrl.searchParams)
+    const assignedDateFilter = assignedRange
+      ? { assignedDate: { gte: assignedRange.gte, lte: assignedRange.lte } }
+      : undefined
+
     const where = mergeLeadWhere(
       baseWhere,
+      assignedDateFilter,
       disposition !== 'All' ? { disposition } : undefined,
       leadSearchFilter(search)
     )
+
+    const statsWhere = assignedDateFilter
+      ? mergeLeadWhere(baseWhere, assignedDateFilter)
+      : baseWhere
+    const statsCacheKey = assignedRange
+      ? `emp:${gated.userId}:${req.nextUrl.searchParams.get('assignedFrom')}:${req.nextUrl.searchParams.get('assignedTo')}`
+      : `emp:${gated.userId}`
 
     const [total, leads, stats] = await Promise.all([
       db.lead.count({ where }),
@@ -72,7 +86,7 @@ export async function GET(req: NextRequest) {
         take: pageSize,
       }),
       includeStats
-        ? countAssignedLeadStatsCached(db, baseWhere, `emp:${gated.userId}`)
+        ? countAssignedLeadStatsCached(db, statsWhere, statsCacheKey)
         : Promise.resolve(undefined),
     ])
 

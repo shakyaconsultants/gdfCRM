@@ -118,6 +118,7 @@ model Lead {
   @@index([createdAt(sort: Desc)])
   @@index([importId, createdAt(sort: Desc)])
   @@index([assignedToId, createdAt(sort: Desc)])
+  @@index([assignedToId, assignedDate(sort: Desc)])
   @@index([assignedAdvisorId, createdAt(sort: Desc)])
   @@index([assignedCaseAssessorId, createdAt(sort: Desc)])
   @@index([disposition, createdAt(sort: Desc)])

@@ -50,3 +50,4 @@ prisma/seed.ts
 
 *.csv
 audit.md
+scripts.md
