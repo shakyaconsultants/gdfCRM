@@ -2,10 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import Link from 'next/link'
+import { Syne, DM_Sans } from 'next/font/google'
+import { motion, useReducedMotion } from 'framer-motion'
 import {
   PhoneCall,
   Users,
-  TrendingUp,
   CheckCircle,
   ChevronDown,
   Menu,
@@ -19,6 +20,18 @@ import {
   MapPin,
   Globe,
 } from 'lucide-react'
+
+const display = Syne({
+  subsets: ['latin'],
+  variable: '--font-sc-display',
+  display: 'swap',
+})
+
+const sans = DM_Sans({
+  subsets: ['latin'],
+  variable: '--font-sc-sans',
+  display: 'swap',
+})
 
 const NAV_LINKS = [
   { label: 'Services', href: '#services' },
@@ -85,9 +98,29 @@ const STEPS = [
   },
 ]
 
+const WHY_POINTS = [
+  'Dedicated reps trained on your product & script',
+  'FCA & ICO compliant outreach processes',
+  'Live CRM tracking with real-time reporting',
+  'No long-term lock-in — results-driven contracts',
+  'India-based team with global client delivery',
+]
+
+const METRICS = [
+  { label: 'Avg. Calls Per Day', value: '200+', sub: 'Per representative' },
+  { label: 'Lead Conversion', value: '18%', sub: 'Industry avg. 8%' },
+  { label: 'Onboarding Time', value: '7 Days', sub: 'From sign-up to live' },
+  { label: 'Quality Score', value: '96%', sub: 'QA monitored calls' },
+]
+
 function smoothScroll(href: string) {
   const el = document.querySelector(href)
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+const fadeUp = {
+  hidden: { opacity: 0, y: 28 },
+  visible: { opacity: 1, y: 0 },
 }
 
 export default function LandingPage() {
@@ -95,6 +128,7 @@ export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false)
   const [activeSection, setActiveSection] = useState('')
   const menuRef = useRef<HTMLDivElement>(null)
+  const reduceMotion = useReducedMotion()
 
   useEffect(() => {
     const onScroll = () => {
@@ -117,77 +151,184 @@ export default function LandingPage() {
   useEffect(() => {
     if (mobileOpen) document.body.style.overflow = 'hidden'
     else document.body.style.overflow = ''
-    return () => { document.body.style.overflow = '' }
+    return () => {
+      document.body.style.overflow = ''
+    }
   }, [mobileOpen])
 
+  const motionProps = reduceMotion
+    ? {}
+    : {
+        initial: 'hidden' as const,
+        whileInView: 'visible' as const,
+        viewport: { once: true, margin: '-80px' },
+        variants: fadeUp,
+        transition: { duration: 0.55, ease: [0.22, 1, 0.36, 1] as const },
+      }
+
   return (
-    <div style={{ backgroundColor: '#05080f', color: '#fff', fontFamily: 'system-ui, sans-serif' }}>
+    <div
+      className={`${display.variable} ${sans.variable} sc-landing`}
+      style={{
+        fontFamily: 'var(--font-sc-sans), system-ui, sans-serif',
+        backgroundColor: 'var(--sc-paper)',
+        color: 'var(--sc-ink)',
+      }}
+    >
+      <style>{`
+        .sc-landing {
+          --sc-ink: #0b1220;
+          --sc-muted: #5a6578;
+          --sc-brand: #1a4f8b;
+          --sc-accent: #2f6fad;
+          --sc-paper: #f5f7fb;
+          --sc-fog: #e8edf5;
+          --sc-line: rgba(11, 18, 32, 0.1);
+          --sc-white: #ffffff;
+        }
+
+        .sc-landing a {
+          text-decoration: none;
+        }
+
+        @keyframes sc-drift {
+          0%,
+          100% {
+            transform: translate3d(0, 0, 0) scale(1);
+          }
+          50% {
+            transform: translate3d(1.2%, -1.2%, 0) scale(1.03);
+          }
+        }
+
+        @keyframes sc-rise {
+          from {
+            opacity: 0;
+            transform: translateY(18px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .sc-hero-media {
+          animation: sc-drift 24s ease-in-out infinite;
+        }
+
+        .sc-hero-copy > * {
+          animation: sc-rise 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
+
+        .sc-hero-copy > *:nth-child(1) {
+          animation-delay: 0.05s;
+        }
+        .sc-hero-copy > *:nth-child(2) {
+          animation-delay: 0.16s;
+        }
+        .sc-hero-copy > *:nth-child(3) {
+          animation-delay: 0.28s;
+        }
+        .sc-hero-copy > *:nth-child(4) {
+          animation-delay: 0.4s;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .sc-hero-media,
+          .sc-hero-copy > * {
+            animation: none !important;
+          }
+        }
+      `}</style>
 
       {/* ── NAVBAR ── */}
       <nav
         className="fixed top-0 left-0 right-0 z-50 transition-all duration-300"
         style={{
-          backgroundColor: scrolled ? 'rgba(5,8,15,0.95)' : 'rgba(5,8,15,0.7)',
-          backdropFilter: 'blur(12px)',
-          borderBottom: scrolled ? '1px solid rgba(245,194,107,0.15)' : 'none',
-          height: '68px',
+          height: '72px',
+          backgroundColor: scrolled ? 'rgba(245, 247, 251, 0.92)' : 'transparent',
+          backdropFilter: scrolled ? 'blur(14px)' : 'none',
+          borderBottom: scrolled ? '1px solid var(--sc-line)' : '1px solid transparent',
         }}
       >
-        <div className="max-w-7xl mx-auto px-5 lg:px-8 flex items-center justify-between h-full">
-          {/* Logo */}
+        <div className="max-w-6xl mx-auto px-5 lg:px-8 flex items-center justify-between h-full">
           <a
             href="#"
-            onClick={(e) => { e.preventDefault(); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-            className="flex items-center gap-2 font-bold text-lg"
-            style={{ color: '#F5C26B' }}
+            onClick={(e) => {
+              e.preventDefault()
+              window.scrollTo({ top: 0, behavior: 'smooth' })
+            }}
+            className="flex items-center gap-3"
+            aria-label="Shakya Consultants home"
           >
-            <Globe size={22} style={{ color: '#F5C26B' }} />
-            GDF Internationals
+            <img
+              src="/logo.png"
+              alt="Shakya Consultants"
+              className="h-10 w-auto max-w-[200px] object-contain"
+            />
+            <span
+              className="hidden sm:block text-[10px] font-medium tracking-[0.14em] uppercase border-l pl-3"
+              style={{
+                color: scrolled || mobileOpen ? 'var(--sc-muted)' : 'rgba(255,255,255,0.65)',
+                borderColor: scrolled || mobileOpen ? 'var(--sc-line)' : 'rgba(255,255,255,0.25)',
+              }}
+            >
+              Sales Portal
+            </span>
           </a>
 
-          {/* Desktop nav */}
-          <div className="hidden md:flex items-center gap-7">
+          <div className="hidden md:flex items-center gap-8">
             {NAV_LINKS.map((item) => (
               <a
                 key={item.href}
                 href={item.href}
-                onClick={(e) => { e.preventDefault(); smoothScroll(item.href) }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  smoothScroll(item.href)
+                }}
                 className="text-sm font-medium transition-colors duration-200"
-                style={{ color: activeSection === item.href ? '#F5C26B' : 'rgba(255,255,255,0.78)' }}
-                onMouseEnter={(e) => { e.currentTarget.style.color = '#F5C26B' }}
-                onMouseLeave={(e) => { e.currentTarget.style.color = activeSection === item.href ? '#F5C26B' : 'rgba(255,255,255,0.78)' }}
+                style={{
+                  color: scrolled
+                    ? activeSection === item.href
+                      ? 'var(--sc-brand)'
+                      : 'var(--sc-muted)'
+                    : activeSection === item.href
+                      ? '#fff'
+                      : 'rgba(255,255,255,0.72)',
+                }}
               >
                 {item.label}
               </a>
             ))}
           </div>
 
-          {/* CTAs */}
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-2">
             <Link
               href="/login"
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg transition-all duration-200"
-              style={{ color: 'rgba(255,255,255,0.7)', backgroundColor: 'transparent' }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = '#fff' }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(255,255,255,0.7)' }}
+              className="inline-flex items-center px-4 py-2 text-sm font-medium transition-colors duration-200"
+              style={{ color: scrolled ? 'var(--sc-muted)' : 'rgba(255,255,255,0.78)' }}
             >
               Team Login
             </Link>
             <Link
               href="/crm-access"
-              className="inline-flex items-center gap-1.5 px-5 py-2 text-sm font-semibold rounded-lg transition-all duration-200"
-              style={{ border: '1.5px solid rgba(245,194,107,0.5)', color: '#F5C26B', backgroundColor: 'transparent' }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(245,194,107,0.1)'; e.currentTarget.style.borderColor = '#F5C26B' }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; e.currentTarget.style.borderColor = 'rgba(245,194,107,0.5)' }}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-semibold transition-opacity hover:opacity-90"
+              style={{
+                backgroundColor: scrolled ? 'var(--sc-brand)' : 'var(--sc-white)',
+                color: scrolled ? 'var(--sc-white)' : 'var(--sc-brand)',
+                borderRadius: '8px',
+              }}
             >
               CRM Access <ArrowRight size={14} />
             </Link>
           </div>
 
-          {/* Hamburger */}
           <button
-            className="md:hidden p-2 rounded-lg"
-            style={{ backgroundColor: 'rgba(245,194,107,0.12)', color: '#F5C26B' }}
+            className="md:hidden p-2 rounded-md"
+            style={{
+              backgroundColor: scrolled ? 'var(--sc-fog)' : 'rgba(255,255,255,0.15)',
+              color: scrolled ? 'var(--sc-brand)' : '#fff',
+            }}
             onClick={() => setMobileOpen((v) => !v)}
             aria-label="Toggle menu"
           >
@@ -200,17 +341,21 @@ export default function LandingPage() {
       {mobileOpen && (
         <div
           ref={menuRef}
-          className="fixed inset-0 z-40 flex flex-col pt-[68px]"
-          style={{ backgroundColor: 'rgba(5,8,15,0.97)', backdropFilter: 'blur(16px)' }}
+          className="fixed inset-0 z-40 flex flex-col pt-[72px]"
+          style={{ backgroundColor: 'rgba(245, 247, 251, 0.98)', backdropFilter: 'blur(16px)' }}
         >
           <div className="flex flex-col gap-1 px-6 py-6">
             {NAV_LINKS.map((item) => (
               <a
                 key={item.href}
                 href={item.href}
-                onClick={(e) => { e.preventDefault(); smoothScroll(item.href); closeMobile() }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  smoothScroll(item.href)
+                  closeMobile()
+                }}
                 className="py-4 text-lg font-medium border-b"
-                style={{ color: 'rgba(255,255,255,0.85)', borderColor: 'rgba(255,255,255,0.08)' }}
+                style={{ color: 'var(--sc-ink)', borderColor: 'var(--sc-line)' }}
               >
                 {item.label}
               </a>
@@ -218,16 +363,24 @@ export default function LandingPage() {
             <Link
               href="/crm-access"
               onClick={closeMobile}
-              className="mt-6 flex items-center justify-center gap-2 py-4 rounded-lg font-semibold text-base"
-              style={{ backgroundColor: '#F5C26B', color: '#000' }}
+              className="mt-6 flex items-center justify-center gap-2 py-4 font-semibold text-base"
+              style={{
+                backgroundColor: 'var(--sc-brand)',
+                color: 'var(--sc-white)',
+                borderRadius: '8px',
+              }}
             >
               CRM Access <ArrowRight size={16} />
             </Link>
             <Link
               href="/login"
               onClick={closeMobile}
-              className="flex items-center justify-center gap-2 py-4 rounded-lg font-semibold text-base mt-2"
-              style={{ border: '1.5px solid rgba(245,194,107,0.4)', color: '#F5C26B', backgroundColor: 'transparent' }}
+              className="flex items-center justify-center gap-2 py-4 font-semibold text-base mt-2"
+              style={{
+                border: '1px solid var(--sc-line)',
+                color: 'var(--sc-brand)',
+                borderRadius: '8px',
+              }}
             >
               Team Login
             </Link>
@@ -236,63 +389,75 @@ export default function LandingPage() {
       )}
 
       {/* ── HERO ── */}
-      <section
-        className="relative min-h-screen flex items-center pt-[68px]"
-        style={{
-          background: 'radial-gradient(ellipse 80% 60% at 50% 0%, rgba(20,40,80,0.9) 0%, rgba(5,8,15,1) 70%)',
-        }}
-      >
-        {/* Subtle grid */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage: 'linear-gradient(rgba(245,194,107,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(245,194,107,0.03) 1px, transparent 1px)',
-            backgroundSize: '60px 60px',
-          }}
-        />
-        <div className="relative z-10 max-w-7xl mx-auto px-5 lg:px-8 py-24 md:py-36">
-          <div className="max-w-3xl">
-            {/* Badge */}
-            <div
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-8 text-sm font-semibold uppercase tracking-wider"
-              style={{ backgroundColor: 'rgba(245,194,107,0.1)', border: '1px solid rgba(245,194,107,0.35)', color: '#F5C26B' }}
-            >
-              <TrendingUp size={14} />
-              Sales Outsourcing Experts
-            </div>
+      <section className="relative min-h-[100svh] flex items-end overflow-hidden">
+        <div className="absolute inset-0 sc-hero-media">
+          <div
+            className="absolute inset-0 bg-cover bg-center"
+            style={{
+              backgroundImage:
+                "url('https://images.unsplash.com/photo-1600880292203-757bb62b4baf?auto=format&fit=crop&w=2400&q=80')",
+            }}
+          />
+          <div
+            className="absolute inset-0"
+            style={{
+              background:
+                'linear-gradient(180deg, rgba(11,18,32,0.45) 0%, rgba(11,18,32,0.62) 42%, rgba(11,18,32,0.92) 100%)',
+            }}
+          />
+          <div
+            className="absolute inset-0 opacity-50"
+            style={{
+              background:
+                'radial-gradient(ellipse 65% 55% at 75% 15%, rgba(47,111,173,0.35), transparent 60%)',
+            }}
+          />
+        </div>
 
+        <div className="relative z-10 w-full max-w-6xl mx-auto px-5 lg:px-8 pb-16 pt-28 md:pb-24 md:pt-36">
+          <div className="sc-hero-copy max-w-2xl">
+            <img
+              src="/logo.png"
+              alt="Shakya Consultants"
+              className="h-16 sm:h-20 md:h-24 w-auto max-w-[min(100%,360px)] object-contain mb-6"
+            />
             <h1
-              className="text-5xl md:text-6xl lg:text-7xl font-bold text-white mb-6 leading-tight"
+              className="text-2xl sm:text-3xl md:text-4xl font-medium text-white/95 mb-5"
+              style={{ fontFamily: 'var(--font-sc-display), system-ui, sans-serif', lineHeight: 1.2 }}
             >
-              We close{' '}
-              <span style={{ color: '#F5C26B' }}>more deals</span>
-              <br />
-              so you can{' '}
-              <span style={{ color: '#F5C26B' }}>scale faster</span>
+              Sales teams that help you grow with clarity
             </h1>
-
-            <p className="text-lg md:text-xl mb-10" style={{ color: 'rgba(255,255,255,0.7)', maxWidth: '580px' }}>
-              GDF Internationals provides dedicated outbound sales teams that generate qualified leads, handle calls, and drive revenue — fully managed, fully compliant.
+            <p className="text-base md:text-lg mb-9 max-w-xl" style={{ color: 'rgba(255,255,255,0.78)' }}>
+              Dedicated outbound teams that generate qualified leads, handle calls, and drive
+              revenue — managed end to end through our sales portal at crm.shakyaconsultants.com.
             </p>
-
-            <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex flex-col sm:flex-row gap-3">
               <a
                 href="#contact"
-                onClick={(e) => { e.preventDefault(); smoothScroll('#contact') }}
-                className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-lg text-base font-bold transition-all duration-200"
-                style={{ backgroundColor: '#F5C26B', color: '#000', boxShadow: '0 0 30px rgba(245,194,107,0.25)' }}
-                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#ffd47a'; e.currentTarget.style.boxShadow = '0 0 50px rgba(245,194,107,0.4)' }}
-                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#F5C26B'; e.currentTarget.style.boxShadow = '0 0 30px rgba(245,194,107,0.25)' }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  smoothScroll('#contact')
+                }}
+                className="inline-flex items-center justify-center gap-2 px-7 py-3.5 text-base font-semibold transition-opacity hover:opacity-90"
+                style={{
+                  backgroundColor: 'var(--sc-white)',
+                  color: 'var(--sc-brand)',
+                  borderRadius: '8px',
+                }}
               >
                 Get in touch <ArrowRight size={18} />
               </a>
               <a
                 href="#services"
-                onClick={(e) => { e.preventDefault(); smoothScroll('#services') }}
-                className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-lg text-base font-semibold text-white transition-all duration-200"
-                style={{ border: '1px solid rgba(255,255,255,0.2)', backgroundColor: 'transparent' }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#F5C26B'; e.currentTarget.style.color = '#F5C26B' }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; e.currentTarget.style.color = '#fff' }}
+                onClick={(e) => {
+                  e.preventDefault()
+                  smoothScroll('#services')
+                }}
+                className="inline-flex items-center justify-center gap-2 px-7 py-3.5 text-base font-medium text-white transition-colors"
+                style={{
+                  border: '1px solid rgba(255,255,255,0.35)',
+                  borderRadius: '8px',
+                }}
               >
                 Our services <ChevronDown size={18} />
               </a>
@@ -302,196 +467,278 @@ export default function LandingPage() {
       </section>
 
       {/* ── STATS ── */}
-      <section style={{ backgroundColor: 'rgba(245,194,107,0.06)', borderTop: '1px solid rgba(245,194,107,0.12)', borderBottom: '1px solid rgba(245,194,107,0.12)' }}>
-        <div className="max-w-7xl mx-auto px-5 lg:px-8 py-14 grid grid-cols-2 md:grid-cols-4 gap-8">
+      <section style={{ backgroundColor: 'var(--sc-white)', borderBottom: '1px solid var(--sc-line)' }}>
+        <div className="max-w-6xl mx-auto px-5 lg:px-8 py-12 md:py-14 grid grid-cols-2 md:grid-cols-4 gap-8 md:gap-6">
           {STATS.map((s) => (
-            <div key={s.label} className="text-center">
-              <div className="text-4xl font-bold mb-2" style={{ color: '#F5C26B' }}>{s.value}</div>
-              <div className="text-sm" style={{ color: 'rgba(255,255,255,0.6)' }}>{s.label}</div>
-            </div>
+            <motion.div key={s.label} className="text-center md:text-left" {...motionProps}>
+              <div
+                className="text-3xl md:text-4xl font-bold mb-1.5 tracking-tight"
+                style={{
+                  fontFamily: 'var(--font-sc-display), system-ui, sans-serif',
+                  color: 'var(--sc-brand)',
+                }}
+              >
+                {s.value}
+              </div>
+              <div className="text-sm" style={{ color: 'var(--sc-muted)' }}>
+                {s.label}
+              </div>
+            </motion.div>
           ))}
         </div>
       </section>
 
       {/* ── SERVICES ── */}
-      <section id="services" className="py-24">
-        <div className="max-w-7xl mx-auto px-5 lg:px-8">
-          <div className="text-center mb-16">
-            <div className="inline-block px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-widest mb-4" style={{ backgroundColor: 'rgba(245,194,107,0.1)', color: '#F5C26B', border: '1px solid rgba(245,194,107,0.25)' }}>
-              What We Do
-            </div>
-            <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
-              Full-service <span style={{ color: '#F5C26B' }}>sales outsourcing</span>
+      <section id="services" className="py-20 md:py-28" style={{ backgroundColor: 'var(--sc-paper)' }}>
+        <div className="max-w-6xl mx-auto px-5 lg:px-8">
+          <motion.div className="max-w-2xl mb-14" {...motionProps}>
+            <h2
+              className="text-3xl md:text-5xl font-bold tracking-tight mb-4"
+              style={{ fontFamily: 'var(--font-sc-display), system-ui, sans-serif', color: 'var(--sc-ink)' }}
+            >
+              Full-service sales outsourcing
             </h2>
-            <p className="text-lg max-w-xl mx-auto" style={{ color: 'rgba(255,255,255,0.6)' }}>
-              From first call to closed deal, we handle every step of the sales process for your business.
+            <p className="text-lg" style={{ color: 'var(--sc-muted)' }}>
+              From first call to closed deal, we handle every step of the sales process for your
+              business.
             </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {SERVICES.map((svc) => (
-              <div
+          </motion.div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-12 gap-y-0">
+            {SERVICES.map((svc, i) => (
+              <motion.div
                 key={svc.title}
-                className="rounded-xl p-7 transition-all duration-200 group"
-                style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
-                onMouseEnter={(e) => { e.currentTarget.style.borderColor = 'rgba(245,194,107,0.3)'; e.currentTarget.style.backgroundColor = 'rgba(245,194,107,0.05)' }}
-                onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.04)' }}
+                className="flex gap-4 py-8"
+                style={{
+                  borderTop: i < 2 ? '1px solid var(--sc-line)' : undefined,
+                  borderBottom: '1px solid var(--sc-line)',
+                }}
+                {...motionProps}
+                transition={{
+                  duration: 0.55,
+                  delay: reduceMotion ? 0 : i * 0.05,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
               >
-                <div className="w-11 h-11 rounded-lg flex items-center justify-center mb-5" style={{ backgroundColor: 'rgba(245,194,107,0.15)' }}>
-                  <svc.icon size={20} style={{ color: '#F5C26B' }} />
+                <div
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md"
+                  style={{ backgroundColor: 'var(--sc-fog)', color: 'var(--sc-accent)' }}
+                >
+                  <svc.icon size={20} strokeWidth={1.75} />
                 </div>
-                <h3 className="text-lg font-semibold text-white mb-3">{svc.title}</h3>
-                <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.6)' }}>{svc.desc}</p>
-              </div>
+                <div>
+                  <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--sc-ink)' }}>
+                    {svc.title}
+                  </h3>
+                  <p className="text-sm leading-relaxed" style={{ color: 'var(--sc-muted)' }}>
+                    {svc.desc}
+                  </p>
+                </div>
+              </motion.div>
             ))}
           </div>
         </div>
       </section>
 
       {/* ── WHY US ── */}
-      <section id="why-us" className="py-24" style={{ backgroundColor: 'rgba(255,255,255,0.02)' }}>
-        <div className="max-w-7xl mx-auto px-5 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
-            <div>
-              <div className="inline-block px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-widest mb-4" style={{ backgroundColor: 'rgba(245,194,107,0.1)', color: '#F5C26B', border: '1px solid rgba(245,194,107,0.25)' }}>
-                Why GDF
-              </div>
-              <h2 className="text-4xl md:text-5xl font-bold text-white mb-6">
-                Built for <span style={{ color: '#F5C26B' }}>results,</span> not just activity
+      <section
+        id="why-us"
+        className="py-20 md:py-28"
+        style={{ backgroundColor: 'var(--sc-ink)', color: 'var(--sc-paper)' }}
+      >
+        <div className="max-w-6xl mx-auto px-5 lg:px-8">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-14 lg:gap-20 items-start">
+            <motion.div {...motionProps}>
+              <h2
+                className="text-3xl md:text-5xl font-bold tracking-tight mb-5"
+                style={{ fontFamily: 'var(--font-sc-display), system-ui, sans-serif' }}
+              >
+                Built for results, not just activity
               </h2>
-              <p className="text-lg mb-8" style={{ color: 'rgba(255,255,255,0.65)' }}>
-                We don&apos;t just make calls. We build structured sales processes, train our teams on your product, and deliver measurable outcomes tied to your growth targets.
+              <p className="text-lg mb-8" style={{ color: 'rgba(245,247,251,0.78)' }}>
+                We don&apos;t just make calls. We build structured sales processes, train our teams
+                on your product, and deliver measurable outcomes tied to your growth targets.
               </p>
-              <div className="flex flex-col gap-4">
-                {[
-                  'Dedicated reps trained on your product & script',
-                  'FCA & ICO compliant outreach processes',
-                  'Live CRM tracking with real-time reporting',
-                  'No long-term lock-in — results-driven contracts',
-                  'UK-based management with global reach',
-                ].map((point) => (
+              <div className="flex flex-col gap-3.5">
+                {WHY_POINTS.map((point) => (
                   <div key={point} className="flex items-start gap-3">
-                    <CheckCircle size={18} style={{ color: '#F5C26B', marginTop: '2px', flexShrink: 0 }} />
-                    <span className="text-sm" style={{ color: 'rgba(255,255,255,0.75)' }}>{point}</span>
+                    <CheckCircle
+                      size={18}
+                      style={{ color: '#8eb6e0', marginTop: '2px', flexShrink: 0 }}
+                    />
+                    <span className="text-sm" style={{ color: 'rgba(245,247,251,0.88)' }}>
+                      {point}
+                    </span>
                   </div>
                 ))}
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-5">
-              {[
-                { label: 'Avg. Calls Per Day', value: '200+', sub: 'Per representative' },
-                { label: 'Lead Conversion', value: '18%', sub: 'Industry avg. 8%' },
-                { label: 'Onboarding Time', value: '7 Days', sub: 'From sign-up to live' },
-                { label: 'Quality Score', value: '96%', sub: 'QA monitored calls' },
-              ].map((card) => (
+            </motion.div>
+
+            <motion.div
+              className="grid grid-cols-2 gap-px overflow-hidden rounded-lg"
+              style={{ backgroundColor: 'rgba(245,247,251,0.12)' }}
+              {...motionProps}
+            >
+              {METRICS.map((card) => (
                 <div
                   key={card.label}
-                  className="rounded-xl p-6 text-center"
-                  style={{ backgroundColor: 'rgba(245,194,107,0.07)', border: '1px solid rgba(245,194,107,0.15)' }}
+                  className="p-6 md:p-7"
+                  style={{ backgroundColor: 'rgba(11, 18, 32, 0.45)' }}
                 >
-                  <div className="text-3xl font-bold mb-1" style={{ color: '#F5C26B' }}>{card.value}</div>
-                  <div className="text-sm font-semibold text-white mb-1">{card.label}</div>
-                  <div className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>{card.sub}</div>
+                  <div
+                    className="text-3xl font-bold mb-2 tracking-tight"
+                    style={{ fontFamily: 'var(--font-sc-display), system-ui, sans-serif' }}
+                  >
+                    {card.value}
+                  </div>
+                  <div className="text-sm font-medium mb-1">{card.label}</div>
+                  <div className="text-xs" style={{ color: 'rgba(245,247,251,0.55)' }}>
+                    {card.sub}
+                  </div>
                 </div>
               ))}
-            </div>
+            </motion.div>
           </div>
         </div>
       </section>
 
       {/* ── HOW IT WORKS ── */}
-      <section id="how-it-works" className="py-24">
-        <div className="max-w-7xl mx-auto px-5 lg:px-8">
-          <div className="text-center mb-16">
-            <div className="inline-block px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-widest mb-4" style={{ backgroundColor: 'rgba(245,194,107,0.1)', color: '#F5C26B', border: '1px solid rgba(245,194,107,0.25)' }}>
-              Process
-            </div>
-            <h2 className="text-4xl md:text-5xl font-bold text-white mb-4">
-              Up and running in <span style={{ color: '#F5C26B' }}>days, not months</span>
+      <section id="how-it-works" className="py-20 md:py-28" style={{ backgroundColor: 'var(--sc-white)' }}>
+        <div className="max-w-6xl mx-auto px-5 lg:px-8">
+          <motion.div className="max-w-2xl mb-14" {...motionProps}>
+            <h2
+              className="text-3xl md:text-5xl font-bold tracking-tight mb-4"
+              style={{ fontFamily: 'var(--font-sc-display), system-ui, sans-serif', color: 'var(--sc-ink)' }}
+            >
+              Up and running in days, not months
             </h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 relative">
-            {/* connector line */}
-            <div className="hidden md:block absolute top-10 left-1/4 right-1/4 h-px" style={{ backgroundColor: 'rgba(245,194,107,0.2)' }} />
-            {STEPS.map((step) => (
-              <div key={step.num} className="text-center relative">
-                <div className="w-20 h-20 rounded-2xl flex items-center justify-center mx-auto mb-6 text-2xl font-bold" style={{ backgroundColor: 'rgba(245,194,107,0.1)', border: '1px solid rgba(245,194,107,0.3)', color: '#F5C26B' }}>
+            <p className="text-lg" style={{ color: 'var(--sc-muted)' }}>
+              A clear path from discovery to live campaigns — without the usual setup drag.
+            </p>
+          </motion.div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-10 md:gap-8">
+            {STEPS.map((step, i) => (
+              <motion.div
+                key={step.num}
+                {...motionProps}
+                transition={{
+                  duration: 0.55,
+                  delay: reduceMotion ? 0 : i * 0.08,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+              >
+                <div
+                  className="text-sm font-semibold tracking-[0.18em] mb-4"
+                  style={{ color: 'var(--sc-accent)' }}
+                >
                   {step.num}
                 </div>
-                <h3 className="text-xl font-semibold text-white mb-3">{step.title}</h3>
-                <p className="text-sm leading-relaxed max-w-xs mx-auto" style={{ color: 'rgba(255,255,255,0.6)' }}>{step.desc}</p>
-              </div>
+                <h3
+                  className="text-xl font-bold mb-3"
+                  style={{
+                    fontFamily: 'var(--font-sc-display), system-ui, sans-serif',
+                    color: 'var(--sc-ink)',
+                  }}
+                >
+                  {step.title}
+                </h3>
+                <p className="text-sm leading-relaxed" style={{ color: 'var(--sc-muted)' }}>
+                  {step.desc}
+                </p>
+              </motion.div>
             ))}
           </div>
         </div>
       </section>
 
       {/* ── CONTACT CTA ── */}
-      <section id="contact" className="py-24" style={{ backgroundColor: 'rgba(245,194,107,0.04)', borderTop: '1px solid rgba(245,194,107,0.12)' }}>
-        <div className="max-w-3xl mx-auto px-5 lg:px-8 text-center">
-          <div className="inline-block px-4 py-1.5 rounded-full text-xs font-semibold uppercase tracking-widest mb-6" style={{ backgroundColor: 'rgba(245,194,107,0.1)', color: '#F5C26B', border: '1px solid rgba(245,194,107,0.25)' }}>
-            Get Started
-          </div>
-          <h2 className="text-4xl md:text-5xl font-bold text-white mb-5">
-            Ready to <span style={{ color: '#F5C26B' }}>grow your revenue?</span>
+      <section
+        id="contact"
+        className="py-20 md:py-28 relative overflow-hidden"
+        style={{ backgroundColor: 'var(--sc-fog)' }}
+      >
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              'radial-gradient(ellipse 60% 80% at 100% 0%, rgba(47,111,173,0.14), transparent 55%)',
+          }}
+        />
+        <motion.div className="relative max-w-3xl mx-auto px-5 lg:px-8 text-center" {...motionProps}>
+          <h2
+            className="text-3xl md:text-5xl font-bold tracking-tight mb-5"
+            style={{ fontFamily: 'var(--font-sc-display), system-ui, sans-serif', color: 'var(--sc-ink)' }}
+          >
+            Ready to grow your revenue?
           </h2>
-          <p className="text-lg mb-10" style={{ color: 'rgba(255,255,255,0.65)' }}>
-            Speak with our team today and find out how GDF Internationals can build a dedicated sales operation for your business.
+          <p className="text-lg mb-10" style={{ color: 'var(--sc-muted)' }}>
+            Speak with our team today and find out how Shakya Consultants can build a dedicated
+            sales operation for your business.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center mb-14">
+          <div className="flex flex-col sm:flex-row gap-3 justify-center mb-12">
             <a
-              href="mailto:harshit@gdfinternationals.com"
-              className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-lg text-base font-bold transition-all duration-200"
-              style={{ backgroundColor: '#F5C26B', color: '#000' }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = '#ffd47a' }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = '#F5C26B' }}
+              href="mailto:hello@shakyaconsultants.com"
+              className="inline-flex items-center justify-center gap-2 px-7 py-3.5 text-base font-semibold transition-opacity hover:opacity-90"
+              style={{
+                backgroundColor: 'var(--sc-brand)',
+                color: 'var(--sc-white)',
+                borderRadius: '8px',
+              }}
             >
               <Mail size={18} /> Email Us
             </a>
             <Link
               href="/crm-access"
-              className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-lg text-base font-semibold transition-all duration-200"
-              style={{ border: '1.5px solid rgba(245,194,107,0.5)', color: '#F5C26B', backgroundColor: 'transparent' }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(245,194,107,0.1)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
+              className="inline-flex items-center justify-center gap-2 px-7 py-3.5 text-base font-semibold transition-colors"
+              style={{
+                border: '1px solid var(--sc-line)',
+                color: 'var(--sc-brand)',
+                backgroundColor: 'var(--sc-white)',
+                borderRadius: '8px',
+              }}
             >
               CRM Access <ArrowRight size={16} />
             </Link>
           </div>
 
-          {/* Contact info */}
-          <div className="flex flex-col sm:flex-row gap-6 justify-center text-sm" style={{ color: 'rgba(255,255,255,0.5)' }}>
+          <div
+            className="flex flex-col sm:flex-row gap-5 sm:gap-8 justify-center text-sm"
+            style={{ color: 'var(--sc-muted)' }}
+          >
             <div className="flex items-center gap-2 justify-center">
-              <Mail size={15} style={{ color: '#F5C26B' }} />
-              harshit@gdfinternationals.com
+              <Mail size={15} style={{ color: 'var(--sc-accent)' }} />
+              hello@shakyaconsultants.com
             </div>
             <div className="flex items-center gap-2 justify-center">
-              <MapPin size={15} style={{ color: '#F5C26B' }} />
-              United Kingdom
+              <MapPin size={15} style={{ color: 'var(--sc-accent)' }} />
+              Kanpur, India
             </div>
             <div className="flex items-center gap-2 justify-center">
-              <Globe size={15} style={{ color: '#F5C26B' }} />
-              gdfinternationals.com
+              <Globe size={15} style={{ color: 'var(--sc-accent)' }} />
+              crm.shakyaconsultants.com
             </div>
           </div>
-        </div>
+        </motion.div>
       </section>
 
       {/* ── FOOTER ── */}
-      <footer style={{ borderTop: '1px solid rgba(255,255,255,0.08)', backgroundColor: '#03050a' }}>
-        <div className="max-w-7xl mx-auto px-5 lg:px-8 py-8 flex flex-col md:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2 font-semibold" style={{ color: '#F5C26B' }}>
-            <Globe size={18} />
-            GDF Internationals
+      <footer style={{ borderTop: '1px solid var(--sc-line)', backgroundColor: 'var(--sc-white)' }}>
+        <div className="max-w-6xl mx-auto px-5 lg:px-8 py-8 flex flex-col md:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <img
+              src="/logo.png"
+              alt="Shakya Consultants"
+              className="h-10 w-auto max-w-[200px] object-contain"
+            />
           </div>
-          <p className="text-xs text-center" style={{ color: 'rgba(255,255,255,0.35)' }}>
-            © {new Date().getFullYear()} GDF Internationals Ltd. All rights reserved.
+          <p className="text-xs text-center" style={{ color: 'var(--sc-muted)' }}>
+            © {new Date().getFullYear()} Shakya Consultants. All rights reserved.
           </p>
           <Link
             href="/login"
             className="text-xs font-medium transition-colors"
-            style={{ color: 'rgba(245,194,107,0.6)' }}
-            onMouseEnter={(e) => { e.currentTarget.style.color = '#F5C26B' }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = 'rgba(245,194,107,0.6)' }}
+            style={{ color: 'var(--sc-accent)' }}
           >
             Team Login →
           </Link>

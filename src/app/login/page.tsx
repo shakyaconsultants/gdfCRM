@@ -109,9 +109,12 @@ export default function LoginPage() {
       >
         <div className="bg-neutral-900/50 backdrop-blur-xl border border-neutral-800 rounded-2xl p-8 shadow-2xl">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-amber-300 to-amber-500 bg-clip-text text-transparent">
-              GDF Internationals
-            </h1>
+            <img
+              src="/logo.png"
+              alt="Shakya Consultants"
+              className="mx-auto h-16 w-auto max-w-[240px] object-contain mb-4"
+            />
+            <h1 className="sr-only">Shakya Consultants</h1>
             <p className="text-neutral-400 mt-2">
               {step === 'credentials'
                 ? 'Team workspace — sign in with your email and password.'

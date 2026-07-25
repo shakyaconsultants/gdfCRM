@@ -3,8 +3,16 @@ import ClientAuthGuard from '@/components/ClientAuthGuard'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Bee CRM',
-  description: 'Bee CRM for managing leads and operations.',
+  title: {
+    default: 'Shakya Consultants CRM',
+    template: '%s | Shakya Consultants',
+  },
+  description:
+    'Shakya Consultants sales portal for managing leads, teams, and operations.',
+  icons: {
+    icon: '/logo.png',
+    apple: '/logo.png',
+  },
 }
 
 export default function RootLayout({
@@ -20,4 +28,3 @@ export default function RootLayout({
     </html>
   )
 }
-

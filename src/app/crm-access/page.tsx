@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Globe, ArrowLeft, Loader2, Mail, KeyRound, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Loader2, Mail, KeyRound, CheckCircle2 } from 'lucide-react'
 
 type Step = 'email' | 'otp' | 'done'
 
@@ -77,9 +77,12 @@ export default function CrmAccessPage() {
         style={{ backgroundColor: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)' }}
       >
         {/* Logo */}
-        <div className="flex items-center gap-2 mb-8">
-          <Globe size={20} style={{ color: '#F5C26B' }} />
-          <span className="font-bold" style={{ color: '#F5C26B' }}>GDF Internationals</span>
+        <div className="flex items-center mb-8">
+          <img
+            src="/logo.png"
+            alt="Shakya Consultants"
+            className="h-12 w-auto max-w-[220px] object-contain"
+          />
         </div>
 
         {step === 'email' && (

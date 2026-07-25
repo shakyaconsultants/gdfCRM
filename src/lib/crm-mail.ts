@@ -50,12 +50,12 @@ export async function sendEmployeeCrmUnlockOtp(opts: {
   const user = getSmtpUser()
   const from =
     process.env.SMTP_FROM?.trim() ||
-    (user ? `Bee CRM <${user}>` : 'Bee CRM <noreply@localhost>')
-  const subject = 'Bee CRM: code to access leads & CRM'
+    (user ? `Shakya Consultants <${user}>` : 'Shakya Consultants <noreply@localhost>')
+  const subject = 'Shakya Consultants CRM: code to access leads & CRM'
   const text = [
     `Hi ${opts.employeeName},`,
     ``,
-    `Use this one-time code to unlock the Bee CRM leads workspace (calling data): ${opts.otp}`,
+    `Use this one-time code to unlock the Shakya Consultants CRM leads workspace (calling data): ${opts.otp}`,
     ``,
     `Expires in 10 minutes. If you did not request access, ignore this email.`,
   ].join('\n')

@@ -109,14 +109,13 @@ export default function Navigation() {
             <Link
               href="/"
               className="flex items-center gap-2 shrink-0 group"
-              aria-label="GDF Internationals — back to website"
+              aria-label="Shakya Consultants — back to website"
             >
-              <span className="text-white font-bold text-lg hidden sm:block tracking-tight group-hover:text-amber-200/90 transition-colors">
-                GDF Internationals
-              </span>
-              <span className="text-white font-bold text-lg sm:hidden tracking-tight group-hover:text-amber-200/90 transition-colors">
-                GDF
-              </span>
+              <img
+                src="/logo.png"
+                alt="Shakya Consultants"
+                className="h-9 w-auto max-w-[180px] object-contain group-hover:opacity-90 transition-opacity"
+              />
             </Link>
             {isAdminContext && (
               <div className="hidden md:flex flex-wrap items-center gap-x-0.5 gap-y-1 ml-0 md:ml-4 pl-0 md:pl-4 md:border-l border-neutral-800 min-w-0">

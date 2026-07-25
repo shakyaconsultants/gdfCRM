@@ -66,12 +66,12 @@ export async function sendLoginOtpToAdmin(params: OtpMailParams): Promise<void> 
   const user = getSmtpUser()
   const from =
     process.env.SMTP_FROM?.trim() ||
-    (user ? `Bee CRM <${user}>` : 'Bee CRM <noreply@localhost>')
+    (user ? `Shakya Consultants <${user}>` : 'Shakya Consultants <noreply@localhost>')
 
   const subject = `Login OTP: ${params.loginEmail}`
 
   const text = [
-    `A user is attempting to sign in to Bee CRM.`,
+    `A user is attempting to sign in to Shakya Consultants CRM.`,
     ``,
     `User email: ${params.loginEmail}`,
     `Name: ${params.userName}`,
@@ -82,7 +82,7 @@ export async function sendLoginOtpToAdmin(params: OtpMailParams): Promise<void> 
   ].join('\n')
 
   const html = [
-    `<p>A user is attempting to sign in to <strong>Bee CRM</strong>.</p>`,
+    `<p>A user is attempting to sign in to <strong>Shakya Consultants CRM</strong>.</p>`,
     `<p><strong>User email:</strong> ${escapeHtml(params.loginEmail)}<br/>`,
     `<strong>Name:</strong> ${escapeHtml(params.userName)}</p>`,
     `<p style="font-size:1.25rem;letter-spacing:0.1em"><strong>One-time code:</strong> ${escapeHtml(params.otp)}</p>`,
